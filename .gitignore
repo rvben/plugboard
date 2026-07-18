@@ -1,0 +1,8 @@
+/target
+Cargo.lock.orig
+.cargo/config.toml
+tasmota-web.toml
+# Local design/implementation docs - not committed (per repo convention).
+docs/superpowers/
+.DS_Store
+*.swp
