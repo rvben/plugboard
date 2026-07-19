@@ -25,12 +25,31 @@ const CSRF_KEY: &str = "csrf";
 /// successful `POST /login`, wiped by `POST /logout`'s `session.flush()`).
 pub(crate) const AUTHENTICATED_KEY: &str = "authenticated";
 
+/// How long a session may sit idle before it expires. Bounds the lifetime of
+/// every session in `MemoryStore`, which otherwise defaults to a two-week
+/// (`tower-sessions`' default `Expiry::OnSessionEnd` fallback) unbounded
+/// lifetime with nothing to ever evict it - an unbounded number of
+/// never-expiring sessions is an unbounded memory leak for a long-running
+/// process.
+const SESSION_INACTIVITY_TIMEOUT: tower_sessions::cookie::time::Duration =
+    tower_sessions::cookie::time::Duration::minutes(30);
+
 /// In-memory sessions (single-instance app). HttpOnly + SameSite=Lax always; the
 /// Secure flag follows config (default true; see `AuthConfig::cookie_secure`).
+///
+/// `MemoryStore` (tower-sessions 0.13) does not implement `ExpiredDeletion`,
+/// so there is no background sweep to actively evict expired records; a
+/// session is instead dropped on its next `load()` once past expiry (`load`
+/// filters out `!is_active(expiry_date)` records). `with_expiry` bounds the
+/// lifetime every session is retained for, which is the part under this
+/// crate's control.
 pub fn session_layer(secure: bool) -> SessionManagerLayer<MemoryStore> {
     SessionManagerLayer::new(MemoryStore::default())
         .with_secure(secure)
         .with_same_site(tower_sessions::cookie::SameSite::Lax)
+        .with_expiry(tower_sessions::Expiry::OnInactivity(
+            SESSION_INACTIVITY_TIMEOUT,
+        ))
 }
 
 fn gen_token() -> String {

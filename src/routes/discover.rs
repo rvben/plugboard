@@ -13,6 +13,7 @@ use crate::auth::Csrf;
 use crate::config::DeviceConfig;
 use crate::error::AppError;
 use crate::fleet::{DeviceView, device_id};
+use crate::redact::scrub_credentials;
 use crate::state::AppState;
 use crate::views::{discover, layout};
 
@@ -43,8 +44,11 @@ pub async fn scan(
     State(state): State<AppState>,
     Form(form): Form<ScanForm>,
 ) -> Result<Markup, AppError> {
-    let hosts =
-        discovery::hosts_in_cidr(&form.range).map_err(|e| AppError::BadRequest(e.to_string()))?;
+    // `hosts_in_cidr` returns a `tasmota_core::Error` too; scrub it like every
+    // other one even though this particular path runs before any network I/O
+    // and cannot realistically carry a credential.
+    let hosts = discovery::hosts_in_cidr(&form.range)
+        .map_err(|e| AppError::BadRequest(scrub_credentials(&e.to_string())))?;
     let transport = state.inner.transport.clone();
     let found = tokio::task::spawn_blocking(move || discovery::scan(&transport, &hosts, 64, None))
         .await

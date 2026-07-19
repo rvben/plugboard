@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use crate::fleet::Fleet;
 use crate::ops;
+use crate::redact::scrub_credentials;
 use crate::state::AppState;
 
 /// Bound on concurrent in-flight device polls, so a large fleet cannot flood the
@@ -99,9 +100,12 @@ fn apply_results(
                     dev.reachable = true;
                 }
                 // Clear the stale status so telemetry renders n/a, never last-seen
-                // readings presented as live; the device is offline.
+                // readings presented as live; the device is offline. `e` may embed
+                // the device's credential-bearing request URL (see `crate::redact`),
+                // so it is scrubbed before being stored - a future UI that renders
+                // `dev.error` can never leak it either.
                 Err(e) => {
-                    dev.error = Some(e.to_string());
+                    dev.error = Some(scrub_credentials(&e.to_string()));
                     dev.status = None;
                     dev.reachable = false;
                 }

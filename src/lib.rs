@@ -5,6 +5,7 @@ pub mod error;
 pub mod fleet;
 pub mod ops;
 pub mod poller;
+pub mod redact;
 pub mod routes;
 pub mod state;
 pub mod views;

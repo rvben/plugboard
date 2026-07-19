@@ -529,6 +529,61 @@ async fn bulk_power_invalid_action_returns_bad_request() {
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
+/// CRITICAL regression test: `tasmota-core` builds device request URLs with
+/// credentials in the query string (`.../cm?cmnd=...&user=admin&password=...`),
+/// and `ureq` attaches the full request URL to a transport-level error (e.g.
+/// connection refused). A raw `tasmota_core::Error` rendered into the toggle
+/// route's response body would leak the device's plaintext password. This
+/// drives a REAL connection-refused failure (a bound-then-dropped TCP
+/// listener, so the port is guaranteed closed) against a device configured
+/// with a password, through the real router, and proves the response body
+/// never contains it.
+#[tokio::test]
+async fn toggle_error_response_never_leaks_device_password() {
+    // Bind an ephemeral port then immediately drop the listener: connecting to
+    // it now fails fast with a genuine OS-level "connection refused", the same
+    // `ureq::Error::Transport` failure mode that leaked a real password (see
+    // the fix this test guards).
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let host = listener.local_addr().unwrap().to_string();
+    drop(listener);
+
+    const SECRET: &str = "SUPER_SECRET_PW";
+    let config = Config {
+        devices: vec![DeviceConfig {
+            name: "Test Plug".into(),
+            host: host.clone(),
+            password: Some(SECRET.into()),
+            protected: false,
+        }],
+        ..Config::default()
+    };
+    let id = device_id(&host);
+    let state = AppState::new(config, PathBuf::from("unused.toml"));
+    let app = routes::router(state, false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    let response = post_toggle(&app, &cookie, &token, &id, None).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_GATEWAY,
+        "the initial (unrefreshed) toggle command itself must fail against an unreachable device"
+    );
+    let body = body_string(response).await;
+    assert!(
+        !body.contains(SECRET),
+        "response body must never leak the device password, body was: {body}"
+    );
+    assert!(
+        !body.contains("user=admin"),
+        "response body must never leak the device username value, body was: {body}"
+    );
+    assert!(
+        body.contains(&host),
+        "the response should still be useful for debugging (contains the host), body was: {body}"
+    );
+}
+
 /// `action=on` maps to `Power ON`, not just `action=off` to `Power OFF` - both
 /// match arms are exercised, not only the one the other tests happen to use.
 #[tokio::test]

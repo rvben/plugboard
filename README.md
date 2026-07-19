@@ -87,6 +87,20 @@ container's default `CMD`) and listens on `8088`, the same default bind port
 as a local run. Never bake device credentials into the image, only mount them
 in at runtime.
 
+The mounted `tasmota-web.toml` **must** set `bind = "0.0.0.0:8088"`:
+
+```toml
+bind = "0.0.0.0:8088"
+```
+
+`tasmota-web`'s default bind (`127.0.0.1:8088`, see "Configuration" below) is
+correct for a bare-metal deployment behind a reverse proxy on the same host,
+but a container that binds container-internal loopback is unreachable from
+outside the container - `-p 8088:8088` publishes the container's `8088`, not
+its loopback interface. In a container, bind `0.0.0.0` and rely on Docker's
+port publishing (and, if you front it with one, your reverse proxy) to
+control what is actually exposed.
+
 ## Configuration
 
 `tasmota-web` reads a TOML config file (default path `./tasmota-web.toml`,

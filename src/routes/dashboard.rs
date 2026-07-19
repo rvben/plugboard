@@ -9,6 +9,7 @@ use crate::auth::Csrf;
 use crate::error::AppError;
 use crate::ops;
 use crate::poller;
+use crate::redact::scrub_credentials;
 use crate::state::AppState;
 use crate::views::components::{bulk_toast, close_modal, confirm_modal, undo_toast};
 use crate::views::dashboard::device_card;
@@ -85,8 +86,10 @@ pub async fn toggle(
                     dev.error = None;
                     dev.reachable = true;
                 }
+                // `e` may embed the device's credential-bearing request URL (see
+                // `crate::redact`), so it is scrubbed before being stored.
                 Err(e) => {
-                    dev.error = Some(e.to_string());
+                    dev.error = Some(scrub_credentials(&e.to_string()));
                     dev.status = None;
                     dev.reachable = false;
                 }
@@ -176,7 +179,13 @@ pub async fn bulk_power(
             Ok((_id, Ok(_relay))) => switched += 1,
             Ok((id, Err(e))) => {
                 failed += 1;
-                tracing::warn!(id = %id, error = %e, "bulk power command failed for device");
+                // `e` may embed the device's credential-bearing request URL (see
+                // `crate::redact`), so it is scrubbed before being logged.
+                tracing::warn!(
+                    id = %id,
+                    error = %scrub_credentials(&e.to_string()),
+                    "bulk power command failed for device"
+                );
             }
             // The task panicked or was cancelled: count it as a failure rather than
             // silently dropping it from the summary.
