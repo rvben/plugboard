@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::{RwLock, broadcast};
@@ -9,6 +10,7 @@ use tasmota_core::{Credentials, DeviceAddr, HttpTransport};
 use crate::auth::RateLimiter;
 use crate::config::Config;
 use crate::fleet::Fleet;
+use crate::metrics::MetricsState;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -24,6 +26,10 @@ pub struct Inner {
     /// Per-IP login attempt counter for `POST /login` (Task 11). One instance
     /// for the process lifetime, shared across every request.
     pub rate_limiter: RateLimiter,
+    /// Accumulating per-device poll-outcome counters for `/metrics`, keyed by
+    /// device id so a fleet rebuild (settings change) never resets them; see
+    /// `crate::metrics`.
+    pub metrics: MetricsState,
 }
 
 impl AppState {
@@ -38,6 +44,7 @@ impl AppState {
                 fleet: RwLock::new(fleet),
                 tx,
                 rate_limiter: RateLimiter::default(),
+                metrics: Mutex::new(HashMap::new()),
             }),
         }
     }

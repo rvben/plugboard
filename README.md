@@ -52,6 +52,8 @@ tablet instead of a terminal.
   interval, all from the UI.
 - **Optional built-in login** (argon2, rate-limited) for deployments that
   don't sit behind an auth-aware reverse proxy.
+- **Prometheus `/metrics` endpoint**, unauthenticated by design, turning the
+  app into a drop-in exporter for the whole fleet with no extra process.
 
 ## Install
 
@@ -211,6 +213,71 @@ authenticating proxy in front of the app.
 - Every write request is checked for a session-bound CSRF token and
   same-origin (`Sec-Fetch-Site` / `Origin`) before it is allowed through,
   regardless of auth mode.
+
+## Metrics (Prometheus)
+
+`tasmota-web` already polls every configured device over HTTP, so it exposes
+that same data at `GET /metrics` in the Prometheus text exposition format
+(`0.0.4`), no MQTT broker and no separate exporter process needed.
+
+**Enabled by default.** Set `metrics_enabled = false` in the config file to
+turn the route into a plain 404.
+
+```toml
+# Serve GET /metrics for Prometheus scraping. Defaults to true.
+metrics_enabled = true
+```
+
+**Unauthenticated by design.** The route sits outside every session/CSRF/login
+layer, in both `proxy` and `builtin` auth mode, exactly like a static asset,
+so a Prometheus server can scrape it directly with no credentials. This is
+deliberate (Prometheus scrapers don't carry a session cookie), but it does
+mean anyone who can reach the port can read it: bind to a private interface,
+put it behind a network boundary, or set `metrics_enabled = false` if you
+can't accept that.
+
+### Absent means absent
+
+The same data-honesty rule as the rest of the app applies here: a metric
+series is emitted only when its value is actually known.
+
+- An offline device emits `tasmota_web_device_reachable{...} 0` and NONE of
+  its telemetry series, its last known values are never replayed as a live
+  reading.
+- A device with no energy sensor emits no `power_watts` / `energy_*` series
+  at all, never a fabricated `0`.
+- A relay in an unrecognized (`Unknown`) state emits no `relay_state` series
+  for that relay, never a guessed on/off.
+- `tasmota_web_device_reachable` is the one series always emitted per
+  configured device, because reachability is always known: the last poll
+  either succeeded or it did not.
+
+### Metrics
+
+| Metric | Type | Labels | Emitted when |
+| --- | --- | --- | --- |
+| `tasmota_web_build_info` | gauge | `version` | always (value `1`) |
+| `tasmota_web_fleet_devices` | gauge | none | always |
+| `tasmota_web_device_reachable` | gauge | `host`, `name` | always, per device |
+| `tasmota_web_device_last_poll_success_timestamp_seconds` | gauge | `host`, `name` | once the device has ever had a successful poll |
+| `tasmota_web_device_poll_total` | counter | `host`, `name`, `result` (`success`\|`error`) | always, per device (accumulates across fleet rebuilds) |
+| `tasmota_web_device_power_watts` | gauge | `host`, `name` | reachable and the device reports live power |
+| `tasmota_web_device_energy_today_kwh` | gauge | `host`, `name` | reachable and the device reports today's energy |
+| `tasmota_web_device_energy_total_kwh` | gauge | `host`, `name` | reachable and the device reports cumulative energy |
+| `tasmota_web_device_wifi_signal_percent` | gauge | `host`, `name` | reachable and the device has reported Wi-Fi signal |
+| `tasmota_web_device_relay_state` | gauge | `host`, `name`, `relay` (index) | reachable and that relay's state is `On`/`Off` (not `Unknown`) |
+
+`host` and `name` are Prometheus-label-escaped (backslash, quote, newline),
+so a device name containing a `"` cannot break the exposition format.
+
+### Scrape config
+
+```yaml
+scrape_configs:
+  - job_name: tasmota-web
+    static_configs:
+      - targets: ["tasmota-web.example.com:8088"]
+```
 
 ## Build / develop
 

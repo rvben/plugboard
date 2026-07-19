@@ -18,7 +18,7 @@ use crate::state::AppState;
 /// attribute (see `AuthConfig::cookie_secure`); pass `false` only for a
 /// trusted plain-http deployment (or in tests using a plain-http transport).
 ///
-/// Three tiers (Task 11):
+/// Three tiers (Task 11), plus a bare `/metrics`:
 /// - **assets** (`/assets/:file`): no session, no CSRF, no auth. Merged in
 ///   OUTSIDE every layer below - it needs none of them.
 /// - **public auth** (`GET`/`POST /login`): session + CSRF (so `Csrf` works
@@ -28,14 +28,18 @@ use crate::state::AppState;
 ///   CSRF + `require_auth`. Every write route inherits CSRF protection
 ///   automatically, and in `AuthMode::Builtin` every route here requires an
 ///   authenticated session.
+/// - **metrics** (`GET /metrics`): no session, no CSRF, no auth, exactly like
+///   assets. A Prometheus scraper hits the container port directly and never
+///   logs in, in either auth mode; see `crate::metrics`.
 ///
 /// Build order matters: `require_auth` is layered onto the app router BEFORE
 /// it is merged with the public auth router (so `/login` is not gated by
 /// it), then the combined router gets the shared session + CSRF layers, then
-/// the asset router is merged in last, outside all of that. There is
-/// deliberately no separate confirm-bypass route for any admin action: each
-/// `/device/:id/...` admin route is the only path that ever executes its
-/// operation, gated by the SAME handler's own `confirmed=true` check.
+/// the asset and metrics routers are merged in last, outside all of that.
+/// There is deliberately no separate confirm-bypass route for any admin
+/// action: each `/device/:id/...` admin route is the only path that ever
+/// executes its operation, gated by the SAME handler's own `confirmed=true`
+/// check.
 pub fn router(state: AppState, secure: bool) -> Router {
     let app_router = Router::new()
         .route("/", get(dashboard::index))
@@ -68,10 +72,15 @@ pub fn router(state: AppState, secure: bool) -> Router {
     let public_auth_router =
         Router::new().route("/login", get(auth::login_get).post(auth::login_post));
 
+    let metrics_router = Router::new()
+        .route("/metrics", get(crate::metrics::handler))
+        .with_state(state.clone());
+
     app_router
         .merge(public_auth_router)
         .layer(middleware::from_fn(crate::auth::csrf_and_origin))
         .layer(crate::auth::session_layer(secure))
         .with_state(state)
         .merge(Router::new().route("/assets/:file", get(assets_route::serve)))
+        .merge(metrics_router)
 }

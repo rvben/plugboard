@@ -13,6 +13,12 @@ pub struct Config {
     pub auth: AuthConfig,
     #[serde(default)]
     pub devices: Vec<DeviceConfig>,
+    /// Whether `GET /metrics` (the Prometheus exporter) is served at all.
+    /// Defaults to on; the route itself is unauthenticated (see
+    /// `routes::router`), so set this false to disable it entirely rather
+    /// than relying on a reverse proxy to hide it.
+    #[serde(default = "default_true")]
+    pub metrics_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +96,7 @@ impl Default for Config {
             poll_interval_secs: default_interval(),
             auth: AuthConfig::default(),
             devices: Vec::new(),
+            metrics_enabled: true,
         }
     }
 }

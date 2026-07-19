@@ -1,9 +1,10 @@
 //! Background task that periodically refreshes every device's status into the
 //! fleet and notifies subscribers (e.g. the SSE stream) of the update.
 
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::fleet::Fleet;
+use crate::metrics;
 use crate::ops;
 use crate::redact::scrub_credentials;
 use crate::state::AppState;
@@ -68,6 +69,16 @@ pub async fn refresh_once(state: &AppState) {
             }
         }
     }
+
+    // Record poll outcomes into the accumulating `/metrics` counters BEFORE
+    // `apply_results` consumes `updates` below. This is pure/synchronous
+    // bookkeeping (no I/O, no lock held across an `.await`), independent of
+    // the fleet write below.
+    let now_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    metrics::record_poll_outcomes(&state.inner.metrics, &targets, &updates, now_unix);
 
     {
         let mut fleet = state.inner.fleet.write().await;
