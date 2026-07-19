@@ -225,6 +225,76 @@ async fn console_destructive_command_requires_confirmation_before_hitting_device
     assert!(confirmed_body.contains("Reset"));
 }
 
+/// The guardrail gate for the `Hazard::RequiresConfirmation` arm (distinct
+/// from the `Destructive` arm covered above), proven non-vacuous with a
+/// paired negative and positive control on the SAME mock: `SetOption65 1`
+/// (a config write, not on the known-safe list, but also not
+/// `Hazard::Destructive`) without `confirmed` is gated (modal, 0 hits); the
+/// identical command with `confirmed=true` DOES reach the device.
+#[tokio::test]
+async fn console_requires_confirmation_command_requires_confirmation_before_hitting_device() {
+    // Self-documents the hazard class this test exercises: fails loudly if
+    // upstream `tasmota_core::guardrail` ever reclassifies this command.
+    assert!(
+        matches!(
+            tasmota_core::guardrail::classify("SetOption65 1"),
+            tasmota_core::guardrail::Hazard::RequiresConfirmation
+        ),
+        "`SetOption65 1` must classify as Hazard::RequiresConfirmation for this test to guard \
+         the `| Hazard::RequiresConfirmation` arm of the console gate"
+    );
+
+    let server = MockServer::start();
+    let setoption = mock_cmnd(&server, "SetOption65 1", json!({"SetOption65": "1"}));
+    let host = server.address().to_string();
+    let id = device_id(&host);
+
+    let state = AppState::new(
+        config_with(&host, "Test Plug"),
+        PathBuf::from("unused.toml"),
+    );
+    let app = routes::router(state, false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    // Negative control: no `confirmed` -> modal, device untouched.
+    let gated = post_form(
+        &app,
+        &cookie,
+        &token,
+        &format!("/device/{id}/console"),
+        "command=SetOption65+1",
+    )
+    .await;
+    assert_eq!(gated.status(), StatusCode::OK);
+    let gated_body = body_string(gated).await;
+    assert!(
+        gated_body.contains(r#"id="modal" hx-swap-oob="true""#),
+        "an unconfirmed RequiresConfirmation console command should return a confirm modal, \
+         body was: {gated_body}"
+    );
+    assert_eq!(
+        setoption.hits(),
+        0,
+        "an unconfirmed RequiresConfirmation console command must not reach the device"
+    );
+
+    // Positive control: identical command plus confirmed=true -> the SAME
+    // mock now receives a hit, proving the prior 0 was a real gate.
+    let confirmed = post_form(
+        &app,
+        &cookie,
+        &token,
+        &format!("/device/{id}/console"),
+        "command=SetOption65+1&confirmed=true",
+    )
+    .await;
+    assert_eq!(confirmed.status(), StatusCode::OK);
+    assert_eq!(setoption.hits(), 1, "confirmed=true must send the command");
+    let confirmed_body = body_string(confirmed).await;
+    assert!(confirmed_body.contains(r#"id="admin-result""#));
+    assert!(confirmed_body.contains("SetOption65"));
+}
+
 // ---------------------------------------------------------------------------
 // config get / set
 // ---------------------------------------------------------------------------
@@ -437,6 +507,52 @@ async fn firmware_update_requires_confirmation_then_sends_upgrade() {
     .await;
     assert_eq!(confirmed.status(), StatusCode::OK);
     assert_eq!(upgrade.hits(), 1, "confirmed=true must send Upgrade 1");
+}
+
+/// `firmware_check` is read-only: it queries `Status 2` and renders the
+/// returned `StatusFWR.Version` into the admin panel, with no confirm modal.
+#[tokio::test]
+async fn firmware_check_hits_device_and_renders_version() {
+    let server = MockServer::start();
+    let status2 = mock_cmnd(
+        &server,
+        "Status 2",
+        json!({"StatusFWR": {"Version": "14.2.0"}}),
+    );
+    let host = server.address().to_string();
+    let id = device_id(&host);
+
+    let state = AppState::new(
+        config_with(&host, "Test Plug"),
+        PathBuf::from("unused.toml"),
+    );
+    let app = routes::router(state, false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    let response = post_form(
+        &app,
+        &cookie,
+        &token,
+        &format!("/device/{id}/firmware/check"),
+        "",
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        status2.hits(),
+        1,
+        "firmware_check must query the device's firmware version"
+    );
+
+    let body = body_string(response).await;
+    assert!(
+        body.contains(r#"id="admin-result""#),
+        "response should carry the admin-result fragment, body was: {body}"
+    );
+    assert!(
+        body.contains("14.2.0"),
+        "the device's reported firmware version should be rendered, body was: {body}"
+    );
 }
 
 // ---------------------------------------------------------------------------
