@@ -45,7 +45,9 @@ impl<S: Send + Sync> FromRequestParts<S> for Csrf {
             Ok(Some(t)) => t,
             _ => {
                 let t = gen_token();
-                let _ = session.insert(CSRF_KEY, &t).await;
+                if let Err(err) = session.insert(CSRF_KEY, &t).await {
+                    tracing::warn!(%err, "failed to store CSRF token in session");
+                }
                 t
             }
         };
@@ -73,10 +75,9 @@ fn same_origin(headers: &HeaderMap) -> bool {
         headers.get("host").and_then(|v| v.to_str().ok()),
     ) {
         (Some(origin), Some(host)) => origin
-            .rsplit("//")
-            .next()
-            .map(|o| o == host)
-            .unwrap_or(false),
+            .split_once("://")
+            .map(|(_, authority)| authority == host)
+            .unwrap_or(false), // no "://" in Origin -> fail closed (does not match)
         (None, _) => true, // no Origin (e.g. same-origin non-CORS form) -> rely on CSRF token
         _ => false,
     }
