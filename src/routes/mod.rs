@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod dashboard;
 pub mod device;
+pub mod discover;
 pub mod events;
 
 use axum::{
@@ -37,6 +38,9 @@ pub fn router(state: AppState, secure: bool) -> Router {
         .route("/device/:id/firmware/check", post(admin::firmware_check))
         .route("/device/:id/firmware/update", post(admin::firmware_update))
         .route("/device/:id/backup", get(admin::backup))
+        .route("/discover", get(discover::index))
+        .route("/discover/scan", post(discover::scan))
+        .route("/discover/add", post(discover::add))
         .route("/modal/close", get(dashboard::modal_close))
         .layer(middleware::from_fn(crate::auth::csrf_and_origin))
         .layer(crate::auth::session_layer(secure))
