@@ -118,11 +118,76 @@ fn mqtt_section(dev: &DeviceView) -> Markup {
     }
 }
 
+/// Wraps admin-panel output in its single shared `#admin-result` region.
+/// Every admin route (`routes::admin`) response - a rendered result, an
+/// empty gated placeholder, or nothing at all - is wrapped here, so every
+/// `hx-target="#admin-result" hx-swap="outerHTML"` form always gets back an
+/// element it can swap itself with.
+pub fn admin_result(content: Markup) -> Markup {
+    html! { div id="admin-result" { (content) } }
+}
+
+/// The per-device admin panel (Task 8): console, config get/set, firmware
+/// check/update, a config backup download link, and a disabled restore
+/// control. Every form targets `#admin-result` with an `outerHTML` swap; the
+/// handler behind each destructive action (`routes::admin`) decides whether
+/// to execute directly or return a confirm modal (an OOB swap into `#modal`)
+/// instead, reusing `tasmota_core::guardrail::classify` exactly like the CLI.
+/// `restore` has no route: its upload endpoint is unverified against a live
+/// device (see `tasmota-cli`'s own `restore` refusal), so the control here is
+/// permanently disabled with an explanatory tooltip rather than wired to a
+/// handler that could report a false success.
+fn admin_panel(dev: &DeviceView) -> Markup {
+    let id = &dev.id;
+    html! {
+        section.admin-panel {
+            h2 { "Admin" }
+            div.admin-section.admin-console {
+                h3 { "Console" }
+                form hx-post=(format!("/device/{id}/console")) hx-target="#admin-result" hx-swap="outerHTML" {
+                    input type="text" name="command" placeholder="e.g. Status 8" required;
+                    button type="submit" { "Run" }
+                }
+            }
+            div.admin-section.admin-config {
+                h3 { "Config" }
+                form hx-post=(format!("/device/{id}/config/get")) hx-target="#admin-result" hx-swap="outerHTML" {
+                    input type="text" name="setting" placeholder="Setting name" required;
+                    button type="submit" { "Get" }
+                }
+                form hx-post=(format!("/device/{id}/config/set")) hx-target="#admin-result" hx-swap="outerHTML" {
+                    input type="text" name="setting" placeholder="Setting name" required;
+                    input type="text" name="value" placeholder="Value" required;
+                    button type="submit" class="btn-danger" { "Set" }
+                }
+            }
+            div.admin-section.admin-firmware {
+                h3 { "Firmware" }
+                form hx-post=(format!("/device/{id}/firmware/check")) hx-target="#admin-result" hx-swap="outerHTML" {
+                    button type="submit" { "Check version" }
+                }
+                form hx-post=(format!("/device/{id}/firmware/update")) hx-target="#admin-result" hx-swap="outerHTML" {
+                    input type="text" name="url" placeholder="OTA URL (optional)";
+                    button type="submit" class="btn-danger" { "Flash firmware" }
+                }
+            }
+            div.admin-section.admin-backup {
+                h3 { "Backup" }
+                a.backup-link href=(format!("/device/{id}/backup")) { "Download config backup (.dmp)" }
+                button type="button" disabled title="Restore is disabled pending endpoint verification against a live device. Use the device web UI (Configuration > Backup/Restore) instead." {
+                    "Restore (unavailable)"
+                }
+            }
+            (admin_result(html! {}))
+        }
+    }
+}
+
 /// Renders the full device detail page: relays, energy, firmware, network,
-/// uptime, and MQTT, plus a placeholder anchor (`#admin-panel`) where Task 8
-/// injects the console/config/firmware/backup admin panel. Every live field
-/// goes through `na()` (or the offline branch above it), so an offline
-/// device or a device with a sparse status never renders a coerced value.
+/// uptime, MQTT, and the admin panel (console/config/firmware/backup).
+/// Every live field goes through `na()` (or the offline branch above it), so
+/// an offline device or a device with a sparse status never renders a
+/// coerced value.
 pub fn device_page(dev: &DeviceView) -> Markup {
     html! {
         div.device-detail {
@@ -137,7 +202,7 @@ pub fn device_page(dev: &DeviceView) -> Markup {
             (network_section(dev))
             (uptime_section(dev))
             (mqtt_section(dev))
-            div id="admin-panel" {}
+            div id="admin-panel" { (admin_panel(dev)) }
         }
     }
 }

@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod dashboard;
 pub mod device;
 pub mod events;
@@ -17,11 +18,12 @@ use crate::state::AppState;
 /// Three-tier routing: `/assets/:file` is public static content and is
 /// merged in OUTSIDE the session + CSRF/same-origin layers (it needs
 /// neither). Every other route (the dashboard, `/device/:id/toggle`,
-/// `/devices/power` and every future write route) sits under
-/// `session_layer` + `csrf_and_origin`, so every write route inherits CSRF
-/// protection automatically. There is deliberately no separate
-/// confirm-bypass route: `/device/:id/toggle` and `/devices/power` are the
-/// only paths that ever execute a power command.
+/// `/devices/power`, the Task 8 admin routes, and every future write route)
+/// sits under `session_layer` + `csrf_and_origin`, so every write route
+/// inherits CSRF protection automatically. There is deliberately no separate
+/// confirm-bypass route for any admin action: each `/device/:id/...` admin
+/// route is the only path that ever executes its operation, gated by the
+/// SAME handler's own `confirmed=true` check.
 pub fn router(state: AppState, secure: bool) -> Router {
     Router::new()
         .route("/", get(dashboard::index))
@@ -29,6 +31,12 @@ pub fn router(state: AppState, secure: bool) -> Router {
         .route("/device/:id", get(device::detail))
         .route("/device/:id/toggle", post(dashboard::toggle))
         .route("/devices/power", post(dashboard::bulk_power))
+        .route("/device/:id/console", post(admin::console))
+        .route("/device/:id/config/get", post(admin::config_get))
+        .route("/device/:id/config/set", post(admin::config_set))
+        .route("/device/:id/firmware/check", post(admin::firmware_check))
+        .route("/device/:id/firmware/update", post(admin::firmware_update))
+        .route("/device/:id/backup", get(admin::backup))
         .route("/modal/close", get(dashboard::modal_close))
         .layer(middleware::from_fn(crate::auth::csrf_and_origin))
         .layer(crate::auth::session_layer(secure))
