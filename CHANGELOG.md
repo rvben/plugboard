@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+
+## [0.1.1](https://github.com/rvben/tasmota-web/compare/v0.1.0...v0.1.1) - 2026-07-19
+
+### Added
+
+- render Wi-Fi RSSI as a signal-strength indicator ([d2c6445](https://github.com/rvben/tasmota-web/commit/d2c6445c2f316f8936ca6cd9463304410e75d7be))
+
 ## [0.1.0] - 2026-07-19
 
 ### Added
