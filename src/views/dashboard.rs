@@ -12,16 +12,24 @@ pub fn device_card(dev: &DeviceView) -> Markup {
     // than nesting a new card inside it (htmx sse-swap defaults to innerHTML).
     html! {
         article.card id=(format!("card-{}", dev.id)) sse-swap=(format!("device-{}", dev.id)) hx-swap="outerHTML" {
-            a.card-name href=(format!("/device/{}", dev.id)) { (dev.display_name()) }
-            div.card-state { (state_badge(dev)) }
-            div.card-power { (na(dev.power_w())) " W" }
-            div.card-today { "today " (na(dev.today_kwh())) " kWh" }
+            div.card-header {
+                a.card-name href=(format!("/device/{}", dev.id)) { (dev.display_name()) }
+                div.card-state { (state_badge(dev)) }
+            }
+            div.card-readouts {
+                div.card-power { (na(dev.power_w())) " W" }
+                div.card-today { "today " (na(dev.today_kwh())) " kWh" }
+            }
             div.card-meta {
                 span.rssi { "rssi " (na(dev.rssi())) }
-                span.online { @if dev.is_online() { "online" } @else { "offline" } }
+                span class=(if dev.is_online() { "online" } else { "online is-offline" }) {
+                    @if dev.is_online() { "online" } @else { "offline" }
+                }
             }
-            form.toggle hx-post=(format!("/device/{}/toggle", dev.id)) hx-swap="outerHTML" hx-target=(format!("#card-{}", dev.id)) {
-                button type="submit" disabled[!dev.is_online()] { "Toggle" }
+            div.card-footer {
+                form.toggle hx-post=(format!("/device/{}/toggle", dev.id)) hx-swap="outerHTML" hx-target=(format!("#card-{}", dev.id)) {
+                    button type="submit" disabled[!dev.is_online()] { "Toggle" }
+                }
             }
         }
     }
