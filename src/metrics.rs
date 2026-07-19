@@ -112,6 +112,18 @@ fn relay_states(dev: &DeviceView) -> Vec<(u8, u8)> {
 /// mirroring how `poller::apply_results` treats it as offline. A poll that
 /// produced no result is not silently invisible in the metrics either.
 ///
+/// `now_unix` is `None` only when the system clock read before the Unix
+/// epoch; a success still increments `poll_success`, but `last_success_unix`
+/// is left as it was rather than fabricated as epoch-0.
+///
+/// `targets` is the full current set of polled device ids for this tick (one
+/// entry per device configured in the fleet), so afterward any `metrics_state`
+/// entry whose id is not in `targets` belongs to a device removed from the
+/// fleet (e.g. via Settings) and is pruned. This is the only place counters
+/// are ever dropped, keeping the map from growing unboundedly across repeated
+/// add/remove churn; every tick polls all current devices, so a removed
+/// device's counters are gone within one poll interval.
+///
 /// Pure and synchronous (the mutex is held only for the duration of the
 /// updates, never across an `.await`), so it is trivially unit-testable
 /// without any device I/O.
@@ -119,7 +131,7 @@ pub fn record_poll_outcomes(
     metrics_state: &MetricsState,
     targets: &[(String, String)],
     updates: &[(String, tasmota_core::Result<tasmota_core::DeviceStatus>)],
-    now_unix: u64,
+    now_unix: Option<u64>,
 ) {
     let mut metrics = metrics_state.lock().unwrap_or_else(PoisonError::into_inner);
     let mut seen = std::collections::HashSet::with_capacity(updates.len());
@@ -128,7 +140,9 @@ pub fn record_poll_outcomes(
         let entry = metrics.entry(id.clone()).or_default();
         if result.is_ok() {
             entry.poll_success += 1;
-            entry.last_success_unix = Some(now_unix);
+            if let Some(secs) = now_unix {
+                entry.last_success_unix = Some(secs);
+            }
         } else {
             entry.poll_error += 1;
         }
@@ -139,6 +153,10 @@ pub fn record_poll_outcomes(
         }
         metrics.entry(id.clone()).or_default().poll_error += 1;
     }
+
+    let current_ids: std::collections::HashSet<&str> =
+        targets.iter().map(|(id, _)| id.as_str()).collect();
+    metrics.retain(|id, _| current_ids.contains(id.as_str()));
 }
 
 /// Renders the full Prometheus text exposition (format version `0.0.4`) for
@@ -610,13 +628,13 @@ mod tests {
                 }),
             ),
         ];
-        record_poll_outcomes(&metrics_state, &targets, &updates, 1_000);
+        record_poll_outcomes(&metrics_state, &targets, &updates, Some(1_000));
 
         // Tick 2: d-1 succeeds again; d-2's poll task is presumed lost (absent
         // from `updates` entirely, not merely an `Err`).
         let updates2: Vec<(String, tasmota_core::Result<DeviceStatus>)> =
             vec![("d-1".to_string(), Ok(status(None, None, Vec::new())))];
-        record_poll_outcomes(&metrics_state, &targets, &updates2, 2_000);
+        record_poll_outcomes(&metrics_state, &targets, &updates2, Some(2_000));
 
         let fleet = Fleet {
             devices: vec![
@@ -667,7 +685,7 @@ mod tests {
         let targets = vec![("d-1".to_string(), "192.0.2.22".to_string())];
         let updates: Vec<(String, tasmota_core::Result<DeviceStatus>)> =
             vec![("d-1".to_string(), Ok(status(None, None, Vec::new())))];
-        record_poll_outcomes(&metrics_state, &targets, &updates, 1_000);
+        record_poll_outcomes(&metrics_state, &targets, &updates, Some(1_000));
 
         // The fleet no longer contains d-1 (removed via Settings).
         let fleet = Fleet { devices: vec![] };
@@ -677,6 +695,43 @@ mod tests {
             !text.contains("192.0.2.22"),
             "an orphaned counter must not appear once its device leaves the fleet; text was:\n{text}"
         );
+    }
+
+    /// `record_poll_outcomes` itself prunes `metrics_state`, not just
+    /// `render`: an entry for a device id that is no longer part of the
+    /// current tick's `targets` (removed via Settings) must be gone from the
+    /// map after the call, while a real device's counters survive untouched.
+    /// This fails if the `retain` at the end of `record_poll_outcomes` is
+    /// removed: the seeded "orphan" entry would still be present afterward.
+    #[test]
+    fn record_poll_outcomes_prunes_orphaned_device_ids() {
+        let metrics_state: MetricsState = Mutex::new(HashMap::new());
+        {
+            let mut guard = metrics_state.lock().unwrap();
+            guard.insert(
+                "orphan".to_string(),
+                DeviceMetrics {
+                    poll_success: 5,
+                    poll_error: 1,
+                    last_success_unix: Some(500),
+                },
+            );
+        }
+
+        let targets = vec![("d-1".to_string(), "192.0.2.40".to_string())];
+        let updates: Vec<(String, tasmota_core::Result<DeviceStatus>)> =
+            vec![("d-1".to_string(), Ok(status(None, None, Vec::new())))];
+        record_poll_outcomes(&metrics_state, &targets, &updates, Some(1_000));
+
+        let guard = metrics_state.lock().unwrap();
+        assert!(
+            !guard.contains_key("orphan"),
+            "a device id no longer among the current targets must be pruned from metrics_state"
+        );
+        let d1 = guard.get("d-1").expect("d-1 counters present");
+        assert_eq!(d1.poll_success, 1);
+        assert_eq!(d1.poll_error, 0);
+        assert_eq!(d1.last_success_unix, Some(1_000));
     }
 
     #[test]

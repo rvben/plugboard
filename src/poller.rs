@@ -74,10 +74,14 @@ pub async fn refresh_once(state: &AppState) {
     // `apply_results` consumes `updates` below. This is pure/synchronous
     // bookkeeping (no I/O, no lock held across an `.await`), independent of
     // the fleet write below.
+    // `None` only on the near-impossible case of a system clock set before
+    // the Unix epoch; recording epoch-0 in that case would fabricate a "last
+    // success" time that never happened, so `record_poll_outcomes` leaves
+    // `last_success_unix` untouched instead.
     let now_unix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
-        .unwrap_or(0);
+        .ok();
     metrics::record_poll_outcomes(&state.inner.metrics, &targets, &updates, now_unix);
 
     {

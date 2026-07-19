@@ -61,8 +61,8 @@ async fn metrics_route_returns_ok_with_plain_text_content_type() {
         .to_str()
         .unwrap()
         .to_string();
-    assert!(
-        content_type.starts_with("text/plain"),
+    assert_eq!(
+        content_type, "text/plain; version=0.0.4; charset=utf-8",
         "content-type was: {content_type}"
     );
 
