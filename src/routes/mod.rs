@@ -15,16 +15,18 @@ use crate::state::AppState;
 ///
 /// Three-tier routing: `/assets/:file` is public static content and is
 /// merged in OUTSIDE the session + CSRF/same-origin layers (it needs
-/// neither). Every other route (the dashboard, `/device/:id/toggle` and
-/// every future write route) sits under `session_layer` + `csrf_and_origin`,
-/// so every write route inherits CSRF protection automatically. There is
-/// deliberately no separate confirm-bypass route: `/device/:id/toggle` is
-/// the only path that ever executes a power command.
+/// neither). Every other route (the dashboard, `/device/:id/toggle`,
+/// `/devices/power` and every future write route) sits under
+/// `session_layer` + `csrf_and_origin`, so every write route inherits CSRF
+/// protection automatically. There is deliberately no separate
+/// confirm-bypass route: `/device/:id/toggle` and `/devices/power` are the
+/// only paths that ever execute a power command.
 pub fn router(state: AppState, secure: bool) -> Router {
     Router::new()
         .route("/", get(dashboard::index))
         .route("/events", get(events::stream))
         .route("/device/:id/toggle", post(dashboard::toggle))
+        .route("/devices/power", post(dashboard::bulk_power))
         .route("/modal/close", get(dashboard::modal_close))
         .layer(middleware::from_fn(crate::auth::csrf_and_origin))
         .layer(crate::auth::session_layer(secure))

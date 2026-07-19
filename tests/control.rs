@@ -28,6 +28,14 @@ fn mock_power_toggle<'a>(server: &'a MockServer, new_state: &str) -> httpmock::M
     })
 }
 
+/// Mocks a bulk `Power ON`/`Power OFF` command (`cmnd` is e.g. `"Power OFF"`).
+fn mock_power<'a>(server: &'a MockServer, cmnd: &str, new_state: &str) -> httpmock::Mock<'a> {
+    server.mock(|when, then| {
+        when.method(GET).path("/cm").query_param("cmnd", cmnd);
+        then.status(200).json_body(json!({"POWER": new_state}));
+    })
+}
+
 fn mock_statetext(server: &MockServer) {
     server.mock(|when, then| {
         when.method(GET)
@@ -58,6 +66,24 @@ fn config_with(host: &str, protected: bool) -> Config {
             password: None,
             protected,
         }],
+        ..Config::default()
+    }
+}
+
+/// A fleet of multiple unprotected devices, one per host, for the bulk
+/// all-on/off tests.
+fn config_with_many(hosts: &[String]) -> Config {
+    Config {
+        devices: hosts
+            .iter()
+            .enumerate()
+            .map(|(i, host)| DeviceConfig {
+                name: format!("Plug {i}"),
+                host: host.clone(),
+                password: None,
+                protected: false,
+            })
+            .collect(),
         ..Config::default()
     }
 }
@@ -100,6 +126,35 @@ async fn get_cookie_and_token(app: &Router) -> (String, String) {
 async fn body_string(response: Response<Body>) -> String {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+/// POSTs `/devices/power`, same-origin and CSRF-authenticated, with `action`
+/// and `confirmed` (set or omitted) as form-urlencoded body.
+async fn post_bulk(
+    app: &Router,
+    cookie: &str,
+    token: &str,
+    action: &str,
+    confirmed: Option<&str>,
+) -> Response<Body> {
+    let mut body = format!("action={action}");
+    if let Some(v) = confirmed {
+        body.push_str(&format!("&confirmed={v}"));
+    }
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/devices/power")
+                .header("cookie", cookie)
+                .header("x-csrf-token", token)
+                .header("sec-fetch-site", "same-origin")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
 }
 
 /// POSTs `/device/{id}/toggle`, same-origin and CSRF-authenticated, with
@@ -334,4 +389,165 @@ async fn toggle_on_never_polled_device_renders_online() {
         !body.contains(r#"type="submit" disabled"#),
         "the toggle button must be enabled once the device is online, body was: {body}"
     );
+}
+
+/// The bulk confirm gate, proven non-vacuous with a paired negative and
+/// positive control on the SAME mocks, across TWO devices: without
+/// `confirmed`, a confirm modal is returned and NEITHER device is touched (0
+/// hits each); with `confirmed=true` on the identical action, the SAME mocks
+/// now receive a hit, proving the prior 0 was a real gate, not a broken mock
+/// or an empty fleet.
+#[tokio::test]
+async fn bulk_power_requires_confirmation_before_switching_any_device() {
+    let server_a = MockServer::start();
+    let server_b = MockServer::start();
+    let power_a = mock_power(&server_a, "Power OFF", "OFF");
+    let power_b = mock_power(&server_b, "Power OFF", "OFF");
+    mock_statetext(&server_a);
+    mock_statetext(&server_b);
+    mock_status(&server_a, "OFF");
+    mock_status(&server_b, "OFF");
+    let host_a = server_a.address().to_string();
+    let host_b = server_b.address().to_string();
+
+    let state = AppState::new(
+        config_with_many(&[host_a, host_b]),
+        PathBuf::from("unused.toml"),
+    );
+    let app = routes::router(state, false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    // Negative control: no `confirmed` field -> confirm modal, no device touched.
+    let gated = post_bulk(&app, &cookie, &token, "off", None).await;
+    assert_eq!(gated.status(), StatusCode::OK);
+    let gated_body = body_string(gated).await;
+    assert!(
+        gated_body.contains("Confirm"),
+        "an unconfirmed bulk request should return a confirm modal; body was: {gated_body}"
+    );
+    assert!(
+        gated_body.contains(r#"id="modal" hx-swap-oob="true""#),
+        "the modal must be an OOB swap into #modal"
+    );
+    assert!(
+        gated_body.contains(r#"id="grid""#),
+        "the primary response must still be the (unchanged) grid, body was: {gated_body}"
+    );
+    assert_eq!(
+        power_a.hits(),
+        0,
+        "a bulk write must not touch device A without confirmation"
+    );
+    assert_eq!(
+        power_b.hits(),
+        0,
+        "a bulk write must not touch device B without confirmation"
+    );
+
+    // Positive control: identical action plus confirmed=true -> the SAME mocks
+    // now receive a hit, proving the prior 0 was a real gate.
+    let confirmed = post_bulk(&app, &cookie, &token, "off", Some("true")).await;
+    assert_eq!(confirmed.status(), StatusCode::OK);
+    assert_eq!(power_a.hits(), 1, "confirmed=true must switch device A");
+    assert_eq!(power_b.hits(), 1, "confirmed=true must switch device B");
+    let confirmed_body = body_string(confirmed).await;
+    assert!(
+        confirmed_body.contains("2 switched"),
+        "the summary toast should report both devices switched, body was: {confirmed_body}"
+    );
+    assert!(
+        !confirmed_body.contains("failed"),
+        "no device failed, so the toast must not mention failure, body was: {confirmed_body}"
+    );
+    assert!(
+        confirmed_body.contains(r#"class="badge off""#),
+        "the confirmed response should reflect the refreshed OFF state, body was: {confirmed_body}"
+    );
+}
+
+/// Partial failure: one device is reachable and switches, the other has no
+/// mock configured (so its command fails). The reachable device must still
+/// switch, the overall response is still 200, and the summary toast reports
+/// both the success and the failure count.
+#[tokio::test]
+async fn bulk_power_partial_failure_still_switches_others_and_reports_summary() {
+    let reachable = MockServer::start();
+    let power_ok = mock_power(&reachable, "Power OFF", "OFF");
+    mock_statetext(&reachable);
+    mock_status(&reachable, "OFF");
+    let host_ok = reachable.address().to_string();
+
+    // No mocks at all on this server: every command against it fails.
+    let unreachable = MockServer::start();
+    let host_bad = unreachable.address().to_string();
+
+    let state = AppState::new(
+        config_with_many(&[host_ok, host_bad]),
+        PathBuf::from("unused.toml"),
+    );
+    let app = routes::router(state, false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    let response = post_bulk(&app, &cookie, &token, "off", Some("true")).await;
+    assert_eq!(
+        response.status(),
+        StatusCode::OK,
+        "one unreachable device must not turn the bulk response into an error"
+    );
+    assert_eq!(
+        power_ok.hits(),
+        1,
+        "the reachable device must still be switched"
+    );
+
+    let body = body_string(response).await;
+    assert!(
+        body.contains("1 switched, 1 failed"),
+        "the toast must report both the success and the failure, body was: {body}"
+    );
+    assert!(
+        body.contains(r#"class="badge off""#),
+        "the switched device's card should reflect the new OFF state, body was: {body}"
+    );
+    assert!(
+        body.contains("offline"),
+        "the unreachable device should render offline after the post-bulk refresh, body was: {body}"
+    );
+}
+
+/// An unrecognized `action` value is a 400, never silently treated as a no-op
+/// or defaulted to on/off.
+#[tokio::test]
+async fn bulk_power_invalid_action_returns_bad_request() {
+    let server = MockServer::start();
+    let host = server.address().to_string();
+    let state = AppState::new(config_with(&host, false), PathBuf::from("unused.toml"));
+    let app = routes::router(state, false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    let response = post_bulk(&app, &cookie, &token, "sideways", Some("true")).await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+/// `action=on` maps to `Power ON`, not just `action=off` to `Power OFF` - both
+/// match arms are exercised, not only the one the other tests happen to use.
+#[tokio::test]
+async fn bulk_power_on_action_sends_power_on() {
+    let server = MockServer::start();
+    let power_on = mock_power(&server, "Power ON", "ON");
+    mock_statetext(&server);
+    mock_status(&server, "ON");
+    let host = server.address().to_string();
+
+    let state = AppState::new(config_with(&host, false), PathBuf::from("unused.toml"));
+    let app = routes::router(state, false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    let response = post_bulk(&app, &cookie, &token, "on", Some("true")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(power_on.hits(), 1, "action=on must send Power ON");
+
+    let body = body_string(response).await;
+    assert!(body.contains("1 switched"), "body was: {body}");
+    assert!(body.contains(r#"class="badge on""#), "body was: {body}");
 }

@@ -8,8 +8,9 @@ use crate::ops;
 use crate::state::AppState;
 
 /// Bound on concurrent in-flight device polls, so a large fleet cannot flood the
-/// blocking pool on a single tick.
-const MAX_CONCURRENT: usize = 16;
+/// blocking pool on a single tick. Shared with `routes::dashboard::bulk_power`,
+/// which fans out a power command with the same bound.
+pub(crate) const MAX_CONCURRENT: usize = 16;
 
 /// Spawn the poller loop. Runs forever, refreshing then sleeping for
 /// `poll_interval_secs` (re-read from config each iteration, minimum 1s).

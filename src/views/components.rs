@@ -64,6 +64,23 @@ pub fn close_modal() -> Markup {
     html! { div id="modal" hx-swap-oob="true" {} }
 }
 
+/// Out-of-band summary toast for a bulk power action ("3 switched", or "3
+/// switched, 1 failed" when some devices errored). No undo: a bulk action
+/// touches every device, so "undo" would itself need to be a confirmed bulk
+/// write; the summary is purely informational.
+pub fn bulk_toast(switched: usize, failed: usize) -> Markup {
+    let message = if failed == 0 {
+        format!("{switched} switched")
+    } else {
+        format!("{switched} switched, {failed} failed")
+    };
+    html! {
+        div id="toasts" hx-swap-oob="beforeend:#toasts" {
+            div.toast { span { (message) } }
+        }
+    }
+}
+
 /// Out-of-band toast with an Undo action (a toggle is its own inverse, so this
 /// switches back). `confirmed=true` via hx-vals so undo also works on protected
 /// devices without another modal. `hx-swap-oob` injects it into `#toasts`.

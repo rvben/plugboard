@@ -75,6 +75,23 @@ main {
   padding: 1.25rem;
 }
 
+.grid-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.grid-header h1 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+
+.bulk-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));

@@ -28,17 +28,50 @@ pub fn device_card(dev: &DeviceView) -> Markup {
 }
 
 /// Renders the device grid: the SSE connection lives here (`sse-connect="/events"`)
-/// so every card's `sse-swap` receives its named event.
-pub fn dashboard_page(fleet: &Fleet) -> Markup {
+/// so every card's `sse-swap` receives its named event. This is also the bulk
+/// all-on/off swap target (Task 6b) - `routes::dashboard::bulk_power` re-renders
+/// this exact fragment so `id="grid"` and `sse-connect` survive an `outerHTML`
+/// swap and SSE keeps working afterward. Factored out of `dashboard_page` so both
+/// call sites always produce identical grid markup.
+pub fn grid(fleet: &Fleet) -> Markup {
     html! {
         // htmx SSE extension: `sse-connect` opens the EventSource; each card's
         // `sse-swap="device-{id}"` receives its named event and swaps in place.
-        // `id="grid"` is the bulk all-on/off swap target (Task 6b).
         section.grid id="grid" sse-connect="/events" {
             @if fleet.devices.is_empty() {
                 p.empty { "No devices yet. " a href="/discover" { "Discover devices" } "." }
             }
             @for dev in &fleet.devices { (device_card(dev)) }
         }
+    }
+}
+
+/// The bulk all-on/off controls above the grid. Each form posts `/devices/power`
+/// and targets `#grid` (`hx-swap="outerHTML"`); the route always confirms first
+/// (Task 6b), so the initial response is a re-rendered (unchanged) grid plus an
+/// OOB confirm modal, never a direct write.
+fn bulk_controls() -> Markup {
+    html! {
+        div.grid-header {
+            h1 { "Devices" }
+            div.bulk-actions {
+                form hx-post="/devices/power" hx-target="#grid" hx-swap="outerHTML" {
+                    input type="hidden" name="action" value="off";
+                    button type="submit" { "All off" }
+                }
+                form hx-post="/devices/power" hx-target="#grid" hx-swap="outerHTML" {
+                    input type="hidden" name="action" value="on";
+                    button type="submit" { "All on" }
+                }
+            }
+        }
+    }
+}
+
+/// The full dashboard body: bulk controls above the device grid.
+pub fn dashboard_page(fleet: &Fleet) -> Markup {
+    html! {
+        (bulk_controls())
+        (grid(fleet))
     }
 }
