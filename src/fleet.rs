@@ -102,6 +102,66 @@ impl Fleet {
 
 #[cfg(test)]
 mod tests {
+    use tasmota_core::{DeviceStatus, Energy, NetInfo};
+
+    use super::DeviceView;
+
+    /// A fully-populated status: energy + RSSI present, as a real device would
+    /// report right before going offline.
+    fn sample_status() -> DeviceStatus {
+        DeviceStatus {
+            host: "192.0.2.20".into(),
+            name: Some("Plug".into()),
+            friendly_names: vec!["Plug".into()],
+            module: Some(1),
+            relays: Vec::new(),
+            firmware: Some("14.2.0".into()),
+            net: NetInfo::default(),
+            uptime: Some("1T00:00:00".into()),
+            wifi_rssi: Some(-50),
+            energy: Some(Energy {
+                power_w: Some(42.0),
+                voltage_v: None,
+                current_a: None,
+                today_kwh: Some(1.5),
+                yesterday_kwh: None,
+                total_kwh: None,
+            }),
+            mqtt: None,
+        }
+    }
+
+    fn view_with(reachable: bool) -> DeviceView {
+        DeviceView {
+            id: "d-test".into(),
+            name: "Plug".into(),
+            host: "192.0.2.20".into(),
+            protected: false,
+            reachable,
+            status: Some(sample_status()),
+            error: None,
+        }
+    }
+
+    /// A stale status must never leak through as live telemetry while the device
+    /// is marked offline: this is the last line of defense against "absent data
+    /// rendered as a plausible value".
+    #[test]
+    fn offline_device_never_leaks_stale_status() {
+        let dev = view_with(false);
+        assert_eq!(dev.power_w(), None);
+        assert_eq!(dev.today_kwh(), None);
+        assert_eq!(dev.rssi(), None);
+    }
+
+    #[test]
+    fn online_device_reports_populated_status() {
+        let dev = view_with(true);
+        assert_eq!(dev.power_w(), Some(42.0));
+        assert_eq!(dev.today_kwh(), Some(1.5));
+        assert_eq!(dev.rssi(), Some(-50));
+    }
+
     #[test]
     fn device_id_is_injective_and_selector_safe() {
         // Distinct hosts that a naive slug would collapse together get distinct ids.

@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use axum::{Router, routing::get};
 use clap::Parser;
 use tasmota_web::config::Config;
+use tasmota_web::poller::spawn_poller;
+use tasmota_web::state::AppState;
 
 #[derive(Parser)]
 #[command(
@@ -23,9 +25,14 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let args = Args::parse();
     let cfg = Config::load(&args.config)?;
-    let app = Router::new().route("/", get(|| async { "tasmota-web" }));
-    let listener = tokio::net::TcpListener::bind(cfg.bind).await?;
-    tracing::info!("listening on {}", cfg.bind);
+    let bind = cfg.bind;
+    let state = AppState::new(cfg, args.config);
+    spawn_poller(state.clone());
+    let app = Router::new()
+        .route("/", get(|| async { "tasmota-web" }))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind(bind).await?;
+    tracing::info!("listening on {}", bind);
     axum::serve(listener, app).await?;
     Ok(())
 }
