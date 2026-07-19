@@ -1,0 +1,162 @@
+/* tasmota-web base stylesheet. Minimal, real styling: reset, layout, and the
+   card grid with state-driven badge colors. Task 12 elevates this further. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --text: #14161a;
+  --muted: #6b7280;
+  --border: #e2e4e9;
+  --accent: #2563eb;
+  --on: #16a34a;
+  --off: #6b7280;
+  --unknown: #d97706;
+  --offline: #dc2626;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --surface: #1d2026;
+    --text: #e7e9ee;
+    --muted: #9aa1ac;
+    --border: #2c303a;
+    --accent: #60a5fa;
+    --on: #4ade80;
+    --off: #9aa1ac;
+    --unknown: #fbbf24;
+    --offline: #f87171;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.25rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar .brand {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.topbar nav a {
+  margin-left: 1rem;
+}
+
+main {
+  padding: 1.25rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.card-name {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.card-meta {
+  display: flex;
+  gap: 0.75rem;
+  color: var(--muted);
+  font-size: 0.85em;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15em 0.6em;
+  border-radius: 999px;
+  font-size: 0.8em;
+  font-weight: 600;
+  color: #fff;
+}
+
+.badge.on {
+  background: var(--on);
+}
+
+.badge.off {
+  background: var(--off);
+}
+
+.badge.unknown {
+  background: var(--unknown);
+}
+
+.badge.offline {
+  background: var(--offline);
+}
+
+.na {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.empty {
+  color: var(--muted);
+}
+
+.toast {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 1rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.modal .modal-body {
+  background: var(--surface);
+  border-radius: 8px;
+  padding: 1.25rem;
+  min-width: 280px;
+}

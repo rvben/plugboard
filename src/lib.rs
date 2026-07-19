@@ -1,3 +1,4 @@
+pub mod assets_route;
 pub mod config;
 pub mod error;
 pub mod fleet;
