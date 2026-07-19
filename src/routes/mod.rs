@@ -1,4 +1,5 @@
 pub mod dashboard;
+pub mod device;
 pub mod events;
 
 use axum::{
@@ -25,6 +26,7 @@ pub fn router(state: AppState, secure: bool) -> Router {
     Router::new()
         .route("/", get(dashboard::index))
         .route("/events", get(events::stream))
+        .route("/device/:id", get(device::detail))
         .route("/device/:id/toggle", post(dashboard::toggle))
         .route("/devices/power", post(dashboard::bulk_power))
         .route("/modal/close", get(dashboard::modal_close))
