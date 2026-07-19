@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 
+
+## [0.1.2](https://github.com/rvben/tasmota-web/compare/v0.1.1...v0.1.2) - 2026-07-19
+
+### Added
+
+- **metrics**: add honest Prometheus /metrics exporter ([0bce98f](https://github.com/rvben/tasmota-web/commit/0bce98f99f82d5b801d42d2aed850e7856ff7862))
+
+### Fixed
+
+- **metrics**: avoid fabricated timestamps, prune orphaned counters ([86438e6](https://github.com/rvben/tasmota-web/commit/86438e677ff1aba879e1f664519902d9ab25cabf))
+
 ## [0.1.1](https://github.com/rvben/tasmota-web/compare/v0.1.0...v0.1.1) - 2026-07-19
 
 ### Added
