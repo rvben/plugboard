@@ -1984,9 +1984,9 @@ dependencies = [
 
 [[package]]
 name = "tasmota-core"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f20f07c818686c8360ebd8afd1a8ba0c460758a98ed1d968bfcec8673e18cff2"
+checksum = "86155ebcb6fc96832c7c3130b5f49bd227724c481ddc1556833248a0da3e18e1"
 dependencies = [
  "serde",
  "serde_json",

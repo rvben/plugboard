@@ -21,7 +21,7 @@ name = "tasmota-web"
 path = "src/main.rs"
 
 [dependencies]
-tasmota-core = "0.1"
+tasmota-core = "0.1.2"
 axum = "0.7"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 tower = "0.5"

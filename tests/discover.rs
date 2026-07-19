@@ -149,17 +149,13 @@ async fn scan_rejects_invalid_range_with_bad_request() {
 /// executes on a real worker) and returns 200 with the empty-results hint,
 /// never an error and never a fabricated row.
 ///
-/// Slow (~30s): published `tasmota-core` 0.1.1's `HttpTransport` never calls
-/// ureq's `.timeout_connect()`, so an unreachable host pays ureq's 30s
-/// connect-timeout default regardless of the configured request timeout -
-/// see the concerns section of `.superpowers/sdd/task-9-report.md`. The
-/// empty-hint RENDERING itself stays covered by the fast, network-free
-/// `results_renders_hint_when_empty` below (it calls `discover::results(&[])`
-/// directly), so this slow test exists only to prove the real scan wiring
-/// still returns 200 + the hint end to end; run it explicitly when touching
-/// that wiring.
+/// Proves the real scan wiring returns 200 + the hint end to end against an
+/// unreachable range. `tasmota-core` 0.1.2+ bounds the TCP connect (its
+/// `HttpTransport` sets ureq's `.timeout_connect()` to 2s), so an unreachable
+/// host fails fast instead of paying ureq's 30s connect default. The empty-hint
+/// RENDERING itself also stays covered by the fast, network-free
+/// `results_renders_hint_when_empty` below.
 #[tokio::test]
-#[ignore = "slow: ~30s until tasmota-core sets an HTTP connect timeout; run explicitly with --ignored"]
 async fn scan_unreachable_range_returns_empty_hint() {
     let app = test_app();
     let (cookie, token) = get_cookie_and_token(&app).await;
