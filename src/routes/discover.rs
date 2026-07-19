@@ -66,6 +66,14 @@ pub struct AddForm {
 /// The duplicate check and the config push happen under the SAME write-lock
 /// hold, so two concurrent adds of the same host can never both succeed; a
 /// duplicate host is rejected with 400 and never appended twice.
+///
+/// If `save_config().await` fails (disk full, permission error, bad path),
+/// the just-pushed device is rolled back out of the in-memory config before
+/// the error is returned - otherwise it would linger as a "ghost" entry that
+/// was never persisted or added to the fleet, yet still fails every future
+/// duplicate check for that host until the process restarts. The config lock
+/// is never held across the `save_config().await`; on failure it is
+/// re-acquired only to remove the device.
 pub async fn add(
     State(state): State<AppState>,
     Form(form): Form<AddForm>,
@@ -86,10 +94,11 @@ pub async fn add(
         }
         cfg.devices.push(device.clone());
     }
-    state
-        .save_config()
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    if let Err(e) = state.save_config().await {
+        let mut cfg = state.inner.config.write().await;
+        cfg.devices.retain(|d| d.host != device.host);
+        return Err(AppError::Internal(e.to_string()));
+    }
     {
         let mut fleet = state.inner.fleet.write().await;
         fleet.devices.push(DeviceView::from_config(&device));

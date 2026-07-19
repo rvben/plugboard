@@ -148,7 +148,18 @@ async fn scan_rejects_invalid_range_with_bad_request() {
 /// `discovery::scan` inside `spawn_blocking` (proving the wiring compiles and
 /// executes on a real worker) and returns 200 with the empty-results hint,
 /// never an error and never a fabricated row.
+///
+/// Slow (~30s): published `tasmota-core` 0.1.1's `HttpTransport` never calls
+/// ureq's `.timeout_connect()`, so an unreachable host pays ureq's 30s
+/// connect-timeout default regardless of the configured request timeout -
+/// see the concerns section of `.superpowers/sdd/task-9-report.md`. The
+/// empty-hint RENDERING itself stays covered by the fast, network-free
+/// `results_renders_hint_when_empty` below (it calls `discover::results(&[])`
+/// directly), so this slow test exists only to prove the real scan wiring
+/// still returns 200 + the hint end to end; run it explicitly when touching
+/// that wiring.
 #[tokio::test]
+#[ignore = "slow: ~30s until tasmota-core sets an HTTP connect timeout; run explicitly with --ignored"]
 async fn scan_unreachable_range_returns_empty_hint() {
     let app = test_app();
     let (cookie, token) = get_cookie_and_token(&app).await;
@@ -306,4 +317,82 @@ async fn add_rejects_duplicate_host_without_duplicating() {
     );
     drop(fleet);
     let _ = std::fs::remove_file(&path);
+}
+
+/// If `state.save_config()` fails, the just-pushed device must be rolled back
+/// out of the in-memory config - otherwise it lingers as a "ghost" entry that
+/// was never persisted or added to the fleet, yet still fails every future
+/// duplicate check for that host.
+///
+/// `Config::save` fails deterministically when `path.parent()` exists but is
+/// NOT a directory: `std::fs::create_dir_all` on a path whose parent is a
+/// regular file returns `Err(AlreadyExists)`. Using a plain file as the
+/// config path's directory forces `save_config().await` to fail on every
+/// call, with no mocking required.
+///
+/// Proven non-vacuous: the first add must fail with a server error (not
+/// 200), AND a second add for the SAME host must NOT be rejected as a
+/// duplicate (400) - if the rollback were missing, the ghost entry from the
+/// first attempt would trip the duplicate check and the second attempt would
+/// come back 400 instead of failing again with a save error.
+#[tokio::test]
+async fn add_rolls_back_on_save_failure_without_ghosting() {
+    let blocker = std::env::temp_dir().join(format!(
+        "tasmota-web-test-discover-blocker-{}.tmp",
+        std::process::id()
+    ));
+    std::fs::write(&blocker, b"not a directory").expect("write blocker file");
+    let bad_path = blocker.join("config.toml");
+
+    let state = AppState::new(Config::default(), bad_path);
+    let app = routes::router(state.clone(), false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    let first = post_form(
+        &app,
+        &cookie,
+        &token,
+        "/discover/add",
+        "name=Lab&host=192.0.2.9",
+    )
+    .await;
+    assert_eq!(
+        first.status(),
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "a save failure must surface as an error status, not 200"
+    );
+
+    let cfg = state.inner.config.read().await;
+    assert!(
+        cfg.devices.is_empty(),
+        "a failed save must roll back the in-memory push, got: {:?}",
+        cfg.devices.iter().map(|d| &d.host).collect::<Vec<_>>()
+    );
+    drop(cfg);
+
+    let fleet = state.inner.fleet.read().await;
+    assert!(
+        fleet.devices.is_empty(),
+        "a failed save must never have updated the fleet"
+    );
+    drop(fleet);
+
+    // Non-vacuous proof: retry the SAME host. A lingering ghost would make
+    // this come back 400 (duplicate) instead of failing again with 500.
+    let second = post_form(
+        &app,
+        &cookie,
+        &token,
+        "/discover/add",
+        "name=Lab&host=192.0.2.9",
+    )
+    .await;
+    assert_ne!(
+        second.status(),
+        StatusCode::BAD_REQUEST,
+        "a retry for the same host must not be rejected as a duplicate - that \
+         would mean a ghost entry survived the failed save"
+    );
+
+    let _ = std::fs::remove_file(&blocker);
 }
