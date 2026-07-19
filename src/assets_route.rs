@@ -13,6 +13,7 @@ pub async fn serve(Path(file): Path<String>) -> Response {
         "app.css" => (include_bytes!("../assets/app.css"), "text/css"),
         "htmx.min.js" => (include_bytes!("../assets/htmx.min.js"), "text/javascript"),
         "sse.js" => (include_bytes!("../assets/sse.js"), "text/javascript"),
+        "csrf.js" => (include_bytes!("../assets/csrf.js"), "text/javascript"),
         _ => return (StatusCode::NOT_FOUND, "not found").into_response(),
     };
     ([(header::CONTENT_TYPE, ctype)], bytes).into_response()
@@ -73,6 +74,24 @@ mod tests {
                 .get(axum::http::header::CONTENT_TYPE)
                 .unwrap(),
             "text/javascript"
+        );
+    }
+
+    #[tokio::test]
+    async fn csrf_js_returns_ok_with_js_content_type() {
+        let resp = serve(Path("csrf.js".to_string())).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(
+            resp.headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .unwrap(),
+            "text/javascript"
+        );
+        let bytes = body_bytes(resp).await;
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(
+            text.contains("X-CSRF-Token"),
+            "csrf.js should set the X-CSRF-Token header on htmx requests"
         );
     }
 

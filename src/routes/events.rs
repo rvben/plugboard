@@ -154,7 +154,7 @@ mod tests {
         let state = AppState::new(config, PathBuf::from("unused.toml"));
         let expected_id = crate::fleet::device_id(&host);
 
-        let app = routes::router(state);
+        let app = routes::router(state, false);
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -207,7 +207,7 @@ mod tests {
         let (state, expected_id) = state_with_one_device("192.0.2.41");
         let expected_event = format!("event: device-{expected_id}");
 
-        let app = routes::router(state.clone());
+        let app = routes::router(state.clone(), false);
         let response = app
             .oneshot(
                 axum::http::Request::builder()
@@ -254,7 +254,7 @@ mod tests {
         let (state, expected_id) = state_with_one_device("192.0.2.42");
         let expected_event = format!("event: device-{expected_id}");
 
-        let app = routes::router(state.clone());
+        let app = routes::router(state.clone(), false);
         let response = app
             .oneshot(
                 axum::http::Request::builder()

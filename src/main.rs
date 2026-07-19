@@ -26,9 +26,10 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     let cfg = Config::load(&args.config)?;
     let bind = cfg.bind;
+    let secure = cfg.auth.cookie_secure;
     let state = AppState::new(cfg, args.config);
     spawn_poller(state.clone());
-    let app = routes::router(state);
+    let app = routes::router(state, secure);
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!("listening on {}", bind);
     axum::serve(listener, app).await?;

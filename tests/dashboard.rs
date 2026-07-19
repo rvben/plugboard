@@ -53,7 +53,7 @@ async fn dashboard_renders_card_with_na_for_missing_energy() {
         dev.status = Some(status_without_energy(&host));
     }
 
-    let app = routes::router(state);
+    let app = routes::router(state, false);
     let response = app
         .oneshot(
             axum::http::Request::builder()
