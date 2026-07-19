@@ -1,7 +1,7 @@
 use maud::{Markup, html};
 
 use crate::fleet::{DeviceView, Fleet};
-use crate::views::components::{na, state_badge};
+use crate::views::components::{na, signal_indicator, state_badge};
 
 /// Renders one device card. This is the SSE swap unit: it must carry a stable
 /// `id="card-{id}"` and `sse-swap="device-{id}"` so a later `device-{id}` SSE
@@ -21,7 +21,7 @@ pub fn device_card(dev: &DeviceView) -> Markup {
                 div.card-today { "today " (na(dev.today_kwh())) " kWh" }
             }
             div.card-meta {
-                span.rssi { "rssi " (na(dev.rssi())) }
+                (signal_indicator(dev.rssi()))
                 span class=(if dev.is_online() { "online" } else { "online is-offline" }) {
                     @if dev.is_online() { "online" } @else { "offline" }
                 }

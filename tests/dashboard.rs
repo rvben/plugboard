@@ -188,10 +188,12 @@ async fn device_detail_renders_partial_status_with_na_and_hides_mqtt_bool() {
 
     // MQTT `connected` is HARD-CODED to n/a, even though this device's status
     // has `mqtt.connected = Some(true)`: proves the hardcoding is non-vacuous
-    // (a naive `na(mqtt.connected)` would render "true" here, not "n/a").
+    // (a naive `na(mqtt.connected)` would render the bool as the text `>true<`
+    // here, not `n/a`). Scoped to a bool rendered as element text, so a legitimate
+    // attribute value like `aria-hidden="true"` does not trip this check.
     assert!(
-        !body.contains("true"),
-        "mqtt connected must never leak the underlying bool as \"true\""
+        !body.contains(">true<"),
+        "mqtt connected must never leak the underlying bool as text"
     );
 }
 

@@ -2,7 +2,7 @@ use maud::{Markup, html};
 use tasmota_core::{DeviceStatus, RelayState};
 
 use crate::fleet::DeviceView;
-use crate::views::components::{na, state_badge};
+use crate::views::components::{na, signal_indicator, state_badge};
 
 /// The device's live status, or `None` when offline. Centralizes the same
 /// `reachable` guard `DeviceView::power_w`/`today_kwh`/`rssi` already apply,
@@ -84,6 +84,7 @@ fn network_section(dev: &DeviceView) -> Markup {
                 dt { "IP" } dd { (na(net.and_then(|n| n.ip.clone()))) }
                 dt { "MAC" } dd { (na(net.and_then(|n| n.mac.clone()))) }
                 dt { "Hostname" } dd { (na(net.and_then(|n| n.hostname.clone()))) }
+                dt { "Wi-Fi signal" } dd { (signal_indicator(dev.rssi())) }
             }
         }
     }

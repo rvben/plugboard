@@ -609,6 +609,48 @@ label:has(input[type="checkbox"]) {
   font-weight: 700;
 }
 
+/* Wi-Fi signal: a mini strength-bars glyph plus the quality percentage. The
+   bars rise left to right; filled bars use the accent, the rest stay faint. */
+.signal {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.signal-bars {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 0.9em;
+}
+
+.signal-bars .bar {
+  width: 3px;
+  background: var(--border-strong);
+  border-radius: 1px;
+}
+
+.signal-bars .bar:nth-child(1) {
+  height: 35%;
+}
+.signal-bars .bar:nth-child(2) {
+  height: 57%;
+}
+.signal-bars .bar:nth-child(3) {
+  height: 78%;
+}
+.signal-bars .bar:nth-child(4) {
+  height: 100%;
+}
+
+.signal-bars .bar.on {
+  background: var(--accent);
+}
+
+.signal-pct {
+  font-variant-numeric: tabular-nums;
+}
+
 .card-footer {
   margin-top: auto;
   padding-top: var(--space-2);

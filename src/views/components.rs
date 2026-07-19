@@ -29,6 +29,34 @@ pub fn state_badge(dev: &DeviceView) -> Markup {
     }
 }
 
+/// Renders a Wi-Fi signal indicator from Tasmota's 0-100 signal-quality
+/// percentage: four strength bars plus the percentage value. `None` (device
+/// offline or not yet polled) renders the muted `n/a`, never a fabricated bar.
+pub fn signal_indicator(pct: Option<i64>) -> Markup {
+    let Some(pct) = pct else {
+        return na::<i64>(None);
+    };
+    let pct = pct.clamp(0, 100);
+    let filled: i64 = match pct {
+        0 => 0,
+        1..=25 => 1,
+        26..=50 => 2,
+        51..=75 => 3,
+        _ => 4,
+    };
+    let label = format!("Wi-Fi signal {pct}%");
+    html! {
+        span.signal title=(label) aria-label=(label) {
+            span.signal-bars aria-hidden="true" {
+                @for i in 1..=4_i64 {
+                    span.bar.on[i <= filled] {}
+                }
+            }
+            span.signal-pct { (pct) "%" }
+        }
+    }
+}
+
 /// A confirmation modal, rendered as an OUT-OF-BAND swap into the layout's `#modal`
 /// placeholder, so opening it never disturbs the page or the card. The confirm form
 /// re-posts `action` with `confirmed=true` plus `hidden` (the original validated
@@ -96,5 +124,59 @@ pub fn undo_toast(id: &str, new_state: &str) -> Markup {
                     hx-swap="outerHTML" { "Undo" }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::signal_indicator;
+
+    #[test]
+    fn signal_indicator_shows_percentage_bars_and_label() {
+        let html = signal_indicator(Some(68)).into_string();
+        assert!(html.contains("68%"), "shows the quality as a percentage");
+        assert!(
+            html.contains("Wi-Fi signal 68%"),
+            "carries an accessible label"
+        );
+        // 51..=75 fills three of the four bars.
+        assert_eq!(html.matches("bar on").count(), 3);
+    }
+
+    #[test]
+    fn signal_indicator_absent_renders_na_not_zero() {
+        let html = signal_indicator(None).into_string();
+        assert!(html.contains("n/a"), "an offline/unpolled device shows n/a");
+        assert!(!html.contains('%'), "never a fabricated 0%");
+        assert!(
+            !html.contains("bar on"),
+            "no filled bars for an absent reading"
+        );
+    }
+
+    #[test]
+    fn signal_indicator_scales_and_clamps_bars() {
+        assert_eq!(
+            signal_indicator(Some(100))
+                .into_string()
+                .matches("bar on")
+                .count(),
+            4
+        );
+        assert_eq!(
+            signal_indicator(Some(0))
+                .into_string()
+                .matches("bar on")
+                .count(),
+            0
+        );
+        // A dBm-like out-of-range value clamps into 0..=100 (no panic, no bogus bar count).
+        assert_eq!(
+            signal_indicator(Some(-55))
+                .into_string()
+                .matches("bar on")
+                .count(),
+            0
+        );
     }
 }
