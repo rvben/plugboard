@@ -1,7 +1,10 @@
 pub mod dashboard;
 pub mod events;
 
-use axum::{Router, middleware, routing::get};
+use axum::{
+    Router, middleware,
+    routing::{get, post},
+};
 
 use crate::assets_route;
 use crate::state::AppState;
@@ -12,13 +15,17 @@ use crate::state::AppState;
 ///
 /// Three-tier routing: `/assets/:file` is public static content and is
 /// merged in OUTSIDE the session + CSRF/same-origin layers (it needs
-/// neither). Every other route (the dashboard now, write routes from Task 6
-/// onward) sits under `session_layer` + `csrf_and_origin`, so every future
-/// write route inherits CSRF protection automatically.
+/// neither). Every other route (the dashboard, `/device/:id/toggle` and
+/// every future write route) sits under `session_layer` + `csrf_and_origin`,
+/// so every write route inherits CSRF protection automatically. There is
+/// deliberately no separate confirm-bypass route: `/device/:id/toggle` is
+/// the only path that ever executes a power command.
 pub fn router(state: AppState, secure: bool) -> Router {
     Router::new()
         .route("/", get(dashboard::index))
         .route("/events", get(events::stream))
+        .route("/device/:id/toggle", post(dashboard::toggle))
+        .route("/modal/close", get(dashboard::modal_close))
         .layer(middleware::from_fn(crate::auth::csrf_and_origin))
         .layer(crate::auth::session_layer(secure))
         .with_state(state)

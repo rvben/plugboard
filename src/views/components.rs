@@ -28,3 +28,56 @@ pub fn state_badge(dev: &DeviceView) -> Markup {
         Some(RelayState::Unknown(_)) | None => html! { span.badge.unknown { "unknown" } },
     }
 }
+
+/// A confirmation modal, rendered as an OUT-OF-BAND swap into the layout's `#modal`
+/// placeholder, so opening it never disturbs the page or the card. The confirm form
+/// re-posts `action` with `confirmed=true` plus `hidden` (the original validated
+/// payload) and targets `target` (the element the confirmed response replaces, e.g.
+/// the card `#card-{id}` or the admin panel `#admin-result`). Values are auto-escaped
+/// by maud. NEVER pass credentials through here.
+pub fn confirm_modal(title: &str, action: &str, hidden: &[(&str, &str)], target: &str) -> Markup {
+    html! {
+        div id="modal" hx-swap-oob="true" {
+            div.modal-backdrop {
+                div.modal role="dialog" aria-modal="true" {
+                    h2 { (title) }
+                    form hx-post=(action) hx-target=(target) hx-swap="outerHTML" {
+                        input type="hidden" name="confirmed" value="true";
+                        @for (k, v) in hidden {
+                            input type="hidden" name=(k) value=(v);
+                        }
+                        div.modal-actions {
+                            button type="button" class="btn-cancel" hx-get="/modal/close" hx-target="#modal" hx-swap="outerHTML" { "Cancel" }
+                            button type="submit" class="btn-danger" { "Confirm" }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Clear the modal region as an OOB swap (returned alongside a confirmed action's
+/// primary response). `GET /modal/close` returns the plain `html! { div id="modal" {} }`
+/// for the Cancel button's direct-target swap.
+pub fn close_modal() -> Markup {
+    html! { div id="modal" hx-swap-oob="true" {} }
+}
+
+/// Out-of-band toast with an Undo action (a toggle is its own inverse, so this
+/// switches back). `confirmed=true` via hx-vals so undo also works on protected
+/// devices without another modal. `hx-swap-oob` injects it into `#toasts`.
+pub fn undo_toast(id: &str, new_state: &str) -> Markup {
+    html! {
+        div id="toasts" hx-swap-oob="beforeend:#toasts" {
+            div.toast {
+                span { "Switched to " (new_state) }
+                button.undo
+                    hx-post=(format!("/device/{id}/toggle"))
+                    hx-vals=r#"{"confirmed":"true"}"#
+                    hx-target=(format!("#card-{id}"))
+                    hx-swap="outerHTML" { "Undo" }
+            }
+        }
+    }
+}
