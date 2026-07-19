@@ -6,6 +6,7 @@ use tokio::sync::{RwLock, broadcast};
 
 use tasmota_core::{Credentials, DeviceAddr, HttpTransport};
 
+use crate::auth::RateLimiter;
 use crate::config::Config;
 use crate::fleet::Fleet;
 
@@ -20,6 +21,9 @@ pub struct Inner {
     pub fleet: RwLock<Fleet>,
     pub tx: broadcast::Sender<()>,
     pub transport: HttpTransport,
+    /// Per-IP login attempt counter for `POST /login` (Task 11). One instance
+    /// for the process lifetime, shared across every request.
+    pub rate_limiter: RateLimiter,
 }
 
 impl AppState {
@@ -33,6 +37,7 @@ impl AppState {
                 config_path,
                 fleet: RwLock::new(fleet),
                 tx,
+                rate_limiter: RateLimiter::default(),
             }),
         }
     }

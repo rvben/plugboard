@@ -4,18 +4,29 @@
 //! non-vacuous proof that a stored device password and the auth
 //! `password_hash` are never rendered into `GET /settings` HTML.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use axum::Router;
 use axum::body::Body;
+use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{Request, Response, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
+use tasmota_web::auth::hash_password;
 use tasmota_web::config::{AuthConfig, AuthMode, Config, DeviceConfig};
 use tasmota_web::fleet::device_id;
 use tasmota_web::routes;
 use tasmota_web::state::AppState;
+
+/// RFC 5737 TEST-NET-3 address used as the fake client IP for tests that
+/// exercise `POST /login` (its per-IP rate limiter needs a `ConnectInfo`,
+/// supplied here via `MockConnectInfo` since `.oneshot()` bypasses the real
+/// `into_make_service_with_connect_info` wiring `main` uses).
+fn test_client_addr() -> SocketAddr {
+    SocketAddr::from(([203, 0, 113, 42], 0))
+}
 
 fn config_with(devices: Vec<DeviceConfig>) -> Config {
     Config {
@@ -51,6 +62,40 @@ async fn get_cookie_and_token(app: &Router) -> (String, String) {
         .headers()
         .get(axum::http::header::SET_COOKIE)
         .expect("GET / should set a session cookie")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let cookie = cookie.split(';').next().unwrap().to_string();
+
+    let body = body_string(response).await;
+    let marker = r#"name="csrf-token" content=""#;
+    let start = body.find(marker).expect("csrf meta tag present") + marker.len();
+    let end = start + body[start..].find('"').expect("closing quote");
+    (cookie, body[start..end].to_string())
+}
+
+/// Like `get_cookie_and_token`, but against the public `GET /login` route
+/// instead of `/` - needed once a config is in `AuthMode::Builtin`, where
+/// `/` is gated behind `require_auth` and only `/login` is reachable
+/// without a prior session.
+async fn get_login_cookie_and_token(app: &Router) -> (String, String) {
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/login")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let cookie = response
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .expect("GET /login should set a session cookie")
         .to_str()
         .unwrap()
         .to_string();
@@ -450,29 +495,55 @@ async fn poll_interval_updates_config() {
 /// `GET /settings` shows the auth mode and whether a built-in credential is
 /// configured, but the `password_hash` string itself never appears -
 /// proven non-vacuous by asserting the mode label DOES render.
+///
+/// Builtin mode gates `/settings` behind `require_auth` (Task 11), so this
+/// test must actually log in first (`GET /login` then `POST /login` with the
+/// real credential the hash was generated from) before it can reach the
+/// page at all - `GET /` is no longer a valid way to seed a session here.
 #[tokio::test]
 async fn auth_password_hash_is_never_rendered() {
     let path = temp_config_path("auth-hash");
-    let hash = "argon2id-hash-should-never-leak-9f8e7d6c";
+    let password = "correct-horse-battery-staple";
+    let hash = hash_password(password);
     let config = Config {
         auth: AuthConfig {
             mode: AuthMode::Builtin,
             username: Some("admin".into()),
-            password_hash: Some(hash.into()),
+            password_hash: Some(hash.clone()),
             cookie_secure: true,
         },
         ..Config::default()
     };
     let state = AppState::new(config, path.clone());
-    let app = routes::router(state, false);
-    let (cookie, _token) = get_cookie_and_token(&app).await;
+    let app = routes::router(state, false).layer(MockConnectInfo(test_client_addr()));
 
-    let response = get_route(&app, &cookie, "/settings").await;
+    let (login_cookie, login_token) = get_login_cookie_and_token(&app).await;
+    let login_response = post_form(
+        &app,
+        &login_cookie,
+        &login_token,
+        "/login",
+        &format!("username=admin&password={password}"),
+    )
+    .await;
+    assert_eq!(login_response.status(), StatusCode::OK);
+    let authed_cookie = login_response
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .expect("a successful login rotates the session cookie")
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+
+    let response = get_route(&app, &authed_cookie, "/settings").await;
     assert_eq!(response.status(), StatusCode::OK);
     let body = body_string(response).await;
 
     assert!(
-        !body.contains(hash),
+        !body.contains(&hash),
         "the auth password_hash must never be rendered, got: {body}"
     );
     // Non-vacuous: the page does render auth-mode info, just not the hash.

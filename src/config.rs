@@ -39,6 +39,21 @@ impl Default for AuthConfig {
     }
 }
 
+impl AuthConfig {
+    /// Both a username and a password hash are configured, and neither is an
+    /// empty string (an empty string counts the same as unset). `None` means
+    /// `Builtin` login must fail closed: reject every attempt regardless of
+    /// what is submitted, since there is nothing valid to compare against.
+    pub fn configured_credentials(&self) -> Option<(&str, &str)> {
+        let username = self.username.as_deref()?;
+        let hash = self.password_hash.as_deref()?;
+        if username.is_empty() || hash.is_empty() {
+            return None;
+        }
+        Some((username, hash))
+    }
+}
+
 fn default_true() -> bool {
     true
 }
