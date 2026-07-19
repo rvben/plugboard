@@ -3,6 +3,7 @@ pub mod dashboard;
 pub mod device;
 pub mod discover;
 pub mod events;
+pub mod settings;
 
 use axum::{
     Router, middleware,
@@ -41,6 +42,12 @@ pub fn router(state: AppState, secure: bool) -> Router {
         .route("/discover", get(discover::index))
         .route("/discover/scan", post(discover::scan))
         .route("/discover/add", post(discover::add))
+        .route("/settings", get(settings::index))
+        .route("/settings/device/rename", post(settings::rename))
+        .route("/settings/device/remove", post(settings::remove))
+        .route("/settings/device/credentials", post(settings::credentials))
+        .route("/settings/device/protected", post(settings::protected))
+        .route("/settings/poll-interval", post(settings::poll_interval))
         .route("/modal/close", get(dashboard::modal_close))
         .layer(middleware::from_fn(crate::auth::csrf_and_origin))
         .layer(crate::auth::session_layer(secure))

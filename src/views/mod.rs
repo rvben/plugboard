@@ -3,3 +3,4 @@ pub mod dashboard;
 pub mod device;
 pub mod discover;
 pub mod layout;
+pub mod settings;
