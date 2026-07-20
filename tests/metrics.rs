@@ -11,6 +11,7 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
+use switchkit::Vendor;
 use tasmota_web::config::{AuthMode, Config, DeviceConfig};
 use tasmota_web::routes;
 use tasmota_web::state::AppState;
@@ -22,6 +23,7 @@ fn config_with_device(host: &str) -> Config {
             host: host.into(),
             password: None,
             protected: false,
+            vendor: Vendor::Tasmota,
         }],
         ..Config::default()
     }

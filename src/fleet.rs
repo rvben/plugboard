@@ -1,4 +1,4 @@
-use switchkit::{DeviceSnapshot, Vendor};
+use switchkit::{DeviceSnapshot, Signal, Vendor};
 
 use crate::config::DeviceConfig;
 
@@ -19,10 +19,9 @@ pub struct DeviceView {
     pub name: String,
     pub host: String,
     pub protected: bool,
-    /// Which vendor's `switchkit::SmartDevice` client serves this device.
-    /// Every device defaults to `Vendor::Tasmota` for now (the fleet is
-    /// effectively Tasmota-only until config carries a real `vendor` field);
-    /// `AppState::client` dispatches on this to pick the right async client.
+    /// Which vendor's `switchkit::SmartDevice` client serves this device,
+    /// carried straight from `DeviceConfig.vendor`. `AppState::client`
+    /// dispatches on this to pick the right async client.
     pub vendor: Vendor,
     /// Whether the last STATUS read (a poll, or a control action's follow-up refresh)
     /// succeeded. This is the single source of truth for "online" AND for whether any
@@ -44,7 +43,7 @@ impl DeviceView {
             name: c.name.clone(),
             host: c.host.clone(),
             protected: c.protected,
-            vendor: Vendor::Tasmota,
+            vendor: c.vendor,
             reachable: false, // unknown until first poll/command
             status: None,
             error: None,
@@ -88,6 +87,17 @@ impl DeviceView {
             .and_then(|s| s.signal.as_ref())
             .and_then(|sig| sig.quality_percent)
             .map(i64::from)
+    }
+    /// The device's raw Wi-Fi/radio signal reading, in whatever unit the
+    /// vendor actually reports (Tasmota: `quality_percent`; Shelly:
+    /// `rssi_dbm`). `None` while offline/unknown, never stale-as-live.
+    /// Rendering (`signal_indicator`) picks the real unit per-vendor and
+    /// never fabricates one from the other.
+    pub fn signal(&self) -> Option<&Signal> {
+        if !self.reachable {
+            return None;
+        }
+        self.status.as_ref().and_then(|s| s.signal.as_ref())
     }
     pub fn is_online(&self) -> bool {
         self.reachable
@@ -160,6 +170,7 @@ mod tests {
         assert_eq!(dev.power_w(), None);
         assert_eq!(dev.today_kwh(), None);
         assert_eq!(dev.rssi(), None);
+        assert_eq!(dev.signal(), None);
     }
 
     #[test]
@@ -168,6 +179,22 @@ mod tests {
         assert_eq!(dev.power_w(), Some(42.0));
         assert_eq!(dev.today_kwh(), Some(1.5));
         assert_eq!(dev.rssi(), Some(50));
+        assert_eq!(dev.signal(), Some(&Signal::from_quality_percent(50)));
+    }
+
+    /// `DeviceView::from_config` must carry the config's vendor through
+    /// unchanged, never silently defaulting a Shelly config back to Tasmota.
+    #[test]
+    fn from_config_carries_vendor_through() {
+        let cfg = crate::config::DeviceConfig {
+            name: "Plug".into(),
+            host: "192.0.2.30".into(),
+            password: None,
+            protected: false,
+            vendor: Vendor::Shelly,
+        };
+        let dev = DeviceView::from_config(&cfg);
+        assert_eq!(dev.vendor, Vendor::Shelly);
     }
 
     #[test]

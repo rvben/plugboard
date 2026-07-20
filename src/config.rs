@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
+use switchkit::Vendor;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -80,6 +81,14 @@ pub struct DeviceConfig {
     pub password: Option<String>,
     #[serde(default)]
     pub protected: bool,
+    /// Which vendor's client serves this device. Defaults to `Tasmota` so
+    /// every config written before this field existed loads unchanged and
+    /// keeps behaving exactly as it did (the fleet was Tasmota-only then).
+    /// `switchkit::Vendor`'s own `#[serde(rename_all = "lowercase")]` already
+    /// serializes/deserializes as `"tasmota"`/`"shelly"`, so no local
+    /// wrapper is needed here.
+    #[serde(default = "default_vendor")]
+    pub vendor: Vendor,
 }
 
 fn default_bind() -> SocketAddr {
@@ -87,6 +96,9 @@ fn default_bind() -> SocketAddr {
 }
 fn default_interval() -> u64 {
     5
+}
+fn default_vendor() -> Vendor {
+    Vendor::Tasmota
 }
 
 impl Default for Config {
@@ -116,5 +128,43 @@ impl Config {
         }
         std::fs::write(path, toml::to_string_pretty(self)?)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A config written before `vendor` existed (no `vendor` key at all) must
+    /// load as `Tasmota` - the fleet was Tasmota-only before this field was
+    /// added, so an old config must keep behaving exactly as it did - and
+    /// re-save with the field made explicit, never silently vanish it.
+    #[test]
+    fn device_config_without_vendor_loads_as_tasmota_and_resaves_explicit() {
+        let toml_str = r#"
+name = "Plug"
+host = "192.0.2.10"
+"#;
+        let cfg: DeviceConfig = toml::from_str(toml_str).expect("parses without a vendor key");
+        assert_eq!(cfg.vendor, Vendor::Tasmota);
+
+        let resaved = toml::to_string(&cfg).expect("re-serializes");
+        assert!(
+            resaved.contains(r#"vendor = "tasmota""#),
+            "resaved config must make the vendor explicit, got:\n{resaved}"
+        );
+    }
+
+    /// A config with an explicit `vendor = "shelly"` loads as `Shelly`, never
+    /// silently coerced to the Tasmota default.
+    #[test]
+    fn device_config_with_shelly_vendor_loads_as_shelly() {
+        let toml_str = r#"
+name = "Plug"
+host = "192.0.2.11"
+vendor = "shelly"
+"#;
+        let cfg: DeviceConfig = toml::from_str(toml_str).expect("parses with an explicit vendor");
+        assert_eq!(cfg.vendor, Vendor::Shelly);
     }
 }

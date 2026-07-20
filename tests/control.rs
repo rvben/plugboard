@@ -14,6 +14,7 @@ use httpmock::prelude::*;
 use serde_json::json;
 use tower::ServiceExt;
 
+use switchkit::Vendor;
 use tasmota_web::config::{Config, DeviceConfig};
 use tasmota_web::fleet::device_id;
 use tasmota_web::routes;
@@ -65,6 +66,7 @@ fn config_with(host: &str, protected: bool) -> Config {
             host: host.into(),
             password: None,
             protected,
+            vendor: Vendor::Tasmota,
         }],
         ..Config::default()
     }
@@ -82,6 +84,7 @@ fn config_with_many(hosts: &[String]) -> Config {
                 host: host.clone(),
                 password: None,
                 protected: false,
+                vendor: Vendor::Tasmota,
             })
             .collect(),
         ..Config::default()
@@ -555,6 +558,7 @@ async fn toggle_error_response_never_leaks_device_password() {
             host: host.clone(),
             password: Some(SECRET.into()),
             protected: false,
+            vendor: Vendor::Tasmota,
         }],
         ..Config::default()
     };

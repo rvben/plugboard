@@ -61,6 +61,7 @@ mod tests {
 
     use axum::body::BodyDataStream;
     use axum::http::StatusCode;
+    use switchkit::Vendor;
     use tower::ServiceExt;
 
     use crate::config::{Config, DeviceConfig};
@@ -128,6 +129,7 @@ mod tests {
                 host: host.clone(),
                 password: None,
                 protected: false,
+                vendor: Vendor::Tasmota,
             }],
             ..Config::default()
         };
@@ -148,6 +150,7 @@ mod tests {
                 host: host.clone(),
                 password: None,
                 protected: false,
+                vendor: Vendor::Tasmota,
             }],
             ..Config::default()
         };

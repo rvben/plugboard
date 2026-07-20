@@ -15,6 +15,7 @@ use httpmock::prelude::*;
 use serde_json::json;
 use tower::ServiceExt;
 
+use switchkit::Vendor;
 use tasmota_web::config::{Config, DeviceConfig};
 use tasmota_web::fleet::device_id;
 use tasmota_web::routes;
@@ -28,6 +29,7 @@ fn config_with(host: &str, name: &str) -> Config {
             host: host.into(),
             password: None,
             protected: false,
+            vendor: Vendor::Tasmota,
         }],
         ..Config::default()
     }

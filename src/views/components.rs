@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
 use maud::{Markup, html};
-use switchkit::RelayState;
+use switchkit::{RelayState, Signal, Vendor};
 
 use crate::fleet::DeviceView;
 
@@ -29,32 +29,93 @@ pub fn state_badge(dev: &DeviceView) -> Markup {
     }
 }
 
-/// Renders a Wi-Fi signal indicator from Tasmota's 0-100 signal-quality
-/// percentage: four strength bars plus the percentage value. `None` (device
-/// offline or not yet polled) renders the muted `n/a`, never a fabricated bar.
-pub fn signal_indicator(pct: Option<i64>) -> Markup {
-    let Some(pct) = pct else {
-        return na::<i64>(None);
-    };
-    let pct = pct.clamp(0, 100);
-    let filled: i64 = match pct {
+/// Maps a Tasmota-style 0-100 signal-quality percentage to a 0..=4 filled-bar
+/// count. Clamped so an out-of-range value never panics or produces a bogus
+/// bar count.
+fn quality_bars(pct: i64) -> i64 {
+    match pct.clamp(0, 100) {
         0 => 0,
         1..=25 => 1,
         26..=50 => 2,
         51..=75 => 3,
         _ => 4,
-    };
-    let label = format!("Wi-Fi signal {pct}%");
+    }
+}
+
+/// Maps a raw Wi-Fi RSSI dBm reading (Shelly's native unit) to a 0..=4
+/// filled-bar count. dBm is negative and closer-to-zero is stronger; these
+/// thresholds mirror the common "excellent/good/fair/weak" RSSI bands used
+/// by most consumer Wi-Fi tooling. This is a bars mapping ONLY - it never
+/// produces or implies a percentage, since dBm and quality-percent are not
+/// interchangeable units and nothing here converts one into the other.
+fn dbm_bars(dbm: i64) -> i64 {
+    match dbm {
+        d if d >= -55 => 4,
+        d if d >= -65 => 3,
+        d if d >= -75 => 2,
+        d if d >= -85 => 1,
+        _ => 0,
+    }
+}
+
+/// Shared four-bar strength indicator markup, given how many of the four
+/// bars are filled (0..=4).
+fn signal_bars(filled: i64) -> Markup {
     html! {
-        span.signal title=(label) aria-label=(label) {
-            span.signal-bars aria-hidden="true" {
-                @for i in 1..=4_i64 {
-                    span.bar.on[i <= filled] {}
-                }
+        span.signal-bars aria-hidden="true" {
+            @for i in 1..=4_i64 {
+                span.bar.on[i <= filled] {}
             }
-            span.signal-pct { (pct) "%" }
         }
     }
+}
+
+/// Renders a Wi-Fi/radio signal indicator from a vendor-neutral `Signal`.
+/// Tasmota devices report `quality_percent` (0-100%); Shelly devices report
+/// `rssi_dbm` (raw dBm). Each renders in its OWN real unit via its own bars
+/// mapping - never fabricated from the other, and never converted between
+/// them. `None` (device offline, not yet polled, or a signal reading with
+/// neither field set) renders the muted `n/a`, never a fabricated bar.
+pub fn signal_indicator(signal: Option<&Signal>) -> Markup {
+    let Some(signal) = signal else {
+        return na::<i64>(None);
+    };
+    if let Some(pct) = signal.quality_percent {
+        let pct = i64::from(pct);
+        let filled = quality_bars(pct);
+        let label = format!("Wi-Fi signal {pct}%");
+        return html! {
+            span.signal title=(label) aria-label=(label) {
+                (signal_bars(filled))
+                span.signal-pct { (pct) "%" }
+            }
+        };
+    }
+    if let Some(dbm) = signal.rssi_dbm {
+        let filled = dbm_bars(dbm);
+        let label = format!("Wi-Fi signal {dbm} dBm");
+        return html! {
+            span.signal title=(label) aria-label=(label) {
+                (signal_bars(filled))
+                span.signal-dbm { (dbm) " dBm" }
+            }
+        };
+    }
+    na::<i64>(None)
+}
+
+/// A small, visually muted vendor tag ("Tasmota"/"Shelly") shown on the
+/// dashboard card and the device detail header, so a mixed fleet is
+/// identifiable at a glance. `Vendor` is `#[non_exhaustive]`, so an unknown
+/// future variant renders "Unknown" rather than failing to compile - it
+/// never falsely claims a specific known vendor.
+pub fn vendor_tag(vendor: Vendor) -> Markup {
+    let label = match vendor {
+        Vendor::Tasmota => "Tasmota",
+        Vendor::Shelly => "Shelly",
+        _ => "Unknown",
+    };
+    html! { span.vendor-tag { (label) } }
 }
 
 /// A confirmation modal, rendered as an OUT-OF-BAND swap into the layout's `#modal`
@@ -129,16 +190,20 @@ pub fn undo_toast(id: &str, new_state: &str) -> Markup {
 
 #[cfg(test)]
 mod tests {
-    use super::signal_indicator;
+    use switchkit::{Signal, Vendor};
+
+    use super::{signal_indicator, vendor_tag};
 
     #[test]
     fn signal_indicator_shows_percentage_bars_and_label() {
-        let html = signal_indicator(Some(68)).into_string();
+        let signal = Signal::from_quality_percent(68);
+        let html = signal_indicator(Some(&signal)).into_string();
         assert!(html.contains("68%"), "shows the quality as a percentage");
         assert!(
             html.contains("Wi-Fi signal 68%"),
             "carries an accessible label"
         );
+        assert!(!html.contains("dBm"), "never fabricates a dBm value");
         // 51..=75 fills three of the four bars.
         assert_eq!(html.matches("bar on").count(), 3);
     }
@@ -156,27 +221,70 @@ mod tests {
 
     #[test]
     fn signal_indicator_scales_and_clamps_bars() {
+        let full = Signal::from_quality_percent(100);
         assert_eq!(
-            signal_indicator(Some(100))
+            signal_indicator(Some(&full))
                 .into_string()
                 .matches("bar on")
                 .count(),
             4
         );
+        let empty = Signal::from_quality_percent(0);
         assert_eq!(
-            signal_indicator(Some(0))
+            signal_indicator(Some(&empty))
                 .into_string()
                 .matches("bar on")
                 .count(),
             0
         );
-        // A dBm-like out-of-range value clamps into 0..=100 (no panic, no bogus bar count).
+    }
+
+    /// A Shelly-style dBm reading renders its own unit, never a fabricated
+    /// percentage: this is the honesty invariant the whole rewrite exists for.
+    #[test]
+    fn signal_indicator_shows_dbm_bars_and_label_never_a_percentage() {
+        let signal = Signal::from_dbm(-60);
+        let html = signal_indicator(Some(&signal)).into_string();
+        assert!(html.contains("-60 dBm"), "shows the raw dBm value");
+        assert!(
+            html.contains("Wi-Fi signal -60 dBm"),
+            "carries an accessible label"
+        );
+        assert!(
+            !html.contains('%'),
+            "never fabricates a percentage from dBm"
+        );
+        // -60 falls in the -65..=-55 band: three of the four bars.
+        assert_eq!(html.matches("bar on").count(), 3);
+    }
+
+    #[test]
+    fn signal_indicator_dbm_scales_across_bands() {
+        let strongest = Signal::from_dbm(-40);
         assert_eq!(
-            signal_indicator(Some(-55))
+            signal_indicator(Some(&strongest))
+                .into_string()
+                .matches("bar on")
+                .count(),
+            4
+        );
+        let weakest = Signal::from_dbm(-95);
+        assert_eq!(
+            signal_indicator(Some(&weakest))
                 .into_string()
                 .matches("bar on")
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn vendor_tag_shows_tasmota_and_shelly_labels() {
+        assert!(
+            vendor_tag(Vendor::Tasmota)
+                .into_string()
+                .contains("Tasmota")
+        );
+        assert!(vendor_tag(Vendor::Shelly).into_string().contains("Shelly"));
     }
 }

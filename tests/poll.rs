@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use httpmock::prelude::*;
 use serde_json::json;
 
+use switchkit::Vendor;
 use tasmota_web::config::{Config, DeviceConfig};
 use tasmota_web::poller::refresh_once;
 use tasmota_web::state::AppState;
@@ -44,6 +45,7 @@ async fn refresh_once_marks_device_reachable_with_status() {
             host: host.clone(),
             password: None,
             protected: false,
+            vendor: Vendor::Tasmota,
         }],
         ..Config::default()
     };
@@ -85,6 +87,7 @@ async fn refresh_once_clears_stale_status_when_device_goes_offline() {
             host,
             password: None,
             protected: false,
+            vendor: Vendor::Tasmota,
         }],
         ..Config::default()
     };

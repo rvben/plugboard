@@ -651,6 +651,23 @@ label:has(input[type="checkbox"]) {
   font-variant-numeric: tabular-nums;
 }
 
+/* Shelly devices report raw dBm rather than a quality percentage; same
+   tabular-numeric treatment as .signal-pct so digits don't jitter. */
+.signal-dbm {
+  font-variant-numeric: tabular-nums;
+}
+
+/* A small, muted vendor label ("Tasmota"/"Shelly") shown on the dashboard
+   card and the device detail header. Reuses .card-meta's muted/uppercase
+   tokens so it reads as metadata, never as a primary control. */
+.vendor-tag {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-family: var(--font-mono);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .card-footer {
   margin-top: auto;
   padding-top: var(--space-2);

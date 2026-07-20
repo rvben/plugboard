@@ -98,6 +98,10 @@ pub async fn add(
         host: form.host,
         password: None,
         protected: false,
+        // Discovery currently only probes Tasmota clients (see `scan` above),
+        // so every device it finds is a real Tasmota device. Task 3 wires
+        // per-vendor discovery and threads the matched vendor through here.
+        vendor: Vendor::Tasmota,
     };
     {
         let mut cfg = state.inner.config.write().await;

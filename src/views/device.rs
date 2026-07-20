@@ -1,8 +1,8 @@
 use maud::{Markup, html};
-use switchkit::{DeviceSnapshot, RelayState};
+use switchkit::{Capabilities, DeviceSnapshot, RelayState};
 
 use crate::fleet::DeviceView;
-use crate::views::components::{na, signal_indicator, state_badge};
+use crate::views::components::{na, signal_indicator, state_badge, vendor_tag};
 
 /// The device's live status, or `None` when offline. Centralizes the same
 /// `reachable` guard `DeviceView::power_w`/`today_kwh`/`rssi` already apply,
@@ -14,6 +14,15 @@ fn live_status(dev: &DeviceView) -> Option<&DeviceSnapshot> {
     } else {
         None
     }
+}
+
+/// The device's confirmed capabilities, or all-`false` (`Capabilities`'
+/// `Default`) when offline/unpolled. Every capability-gated section below
+/// reads through here so a capability is never claimed for a device we
+/// currently have no live snapshot to confirm it from - a gated section is
+/// simply absent rather than shown as a broken/disabled control.
+fn capabilities(dev: &DeviceView) -> Capabilities {
+    live_status(dev).map(|s| s.capabilities).unwrap_or_default()
 }
 
 fn relay_badge(state: &RelayState) -> Markup {
@@ -48,7 +57,14 @@ fn relays_section(dev: &DeviceView) -> Markup {
     }
 }
 
+/// Rendered only when the device confirms `capabilities.metering` - a
+/// non-metering device has no energy data model at all, so showing this
+/// section (even full of `n/a`) would imply a capability the device does
+/// not have.
 fn energy_section(dev: &DeviceView) -> Markup {
+    if !capabilities(dev).metering {
+        return html! {};
+    }
     let energy = live_status(dev).and_then(|s| s.energy.as_ref());
     html! {
         section.energy {
@@ -71,7 +87,12 @@ fn energy_section(dev: &DeviceView) -> Markup {
     }
 }
 
+/// Rendered only when the device confirms `capabilities.firmware_ota` -
+/// mirrors `energy_section`'s reasoning.
 fn firmware_section(dev: &DeviceView) -> Markup {
+    if !capabilities(dev).firmware_ota {
+        return html! {};
+    }
     let firmware = live_status(dev)
         .and_then(|s| s.firmware.as_ref())
         .and_then(|f| f.version.clone());
@@ -92,7 +113,7 @@ fn network_section(dev: &DeviceView) -> Markup {
                 dt { "IP" } dd { (na(net.and_then(|n| n.ip.clone()))) }
                 dt { "MAC" } dd { (na(net.and_then(|n| n.mac.clone()))) }
                 dt { "Hostname" } dd { (na(net.and_then(|n| n.hostname.clone()))) }
-                dt { "Wi-Fi signal" } dd { (signal_indicator(dev.rssi())) }
+                dt { "Wi-Fi signal" } dd { (signal_indicator(dev.signal())) }
             }
         }
     }
@@ -104,29 +125,6 @@ fn uptime_section(dev: &DeviceView) -> Markup {
         section.uptime {
             h2 { "Uptime" }
             p { (na(uptime)) }
-        }
-    }
-}
-
-/// `switchkit`'s vendor-neutral `DeviceSnapshot` carries no MQTT status at
-/// all (unlike Tasmota's own status response, which the old sync
-/// `tasmota_core` path used to read this whole section from): every field
-/// here is now permanently `n/a`, not merely the "Connected" flag that was
-/// already hard-coded before this migration (Tasmota never exposed a
-/// reliable live MQTT connected/disconnected flag over HTTP either). This is
-/// a genuine, unavoidable behavior change; the section is kept (rather than
-/// removed) so the page layout is unchanged.
-fn mqtt_section(_dev: &DeviceView) -> Markup {
-    html! {
-        section.mqtt {
-            h2 { "MQTT" }
-            dl {
-                dt { "Host" } dd { (na::<String>(None)) }
-                dt { "Port" } dd { (na::<u16>(None)) }
-                dt { "Client" } dd { (na::<String>(None)) }
-                dt { "Reconnects" } dd { (na::<u32>(None)) }
-                dt { "Connected" } dd { (na::<bool>(None)) }
-            }
         }
     }
 }
@@ -150,45 +148,63 @@ pub fn admin_result(content: Markup) -> Markup {
 /// device (see `tasmota-cli`'s own `restore` refusal), so the control here is
 /// permanently disabled with an explanatory tooltip rather than wired to a
 /// handler that could report a false success.
+///
+/// Console+Config are gated on `capabilities.console`, Firmware on
+/// `capabilities.firmware_ota`, Backup on `capabilities.config_backup` - a
+/// device lacking a capability simply has no subsection for it, never a
+/// visible-but-disabled control implying a capability it doesn't have. When
+/// NONE of the three capabilities are confirmed (offline, unpolled, or a
+/// device with no admin surface at all), the whole panel - including
+/// `#admin-result` - is absent.
 fn admin_panel(dev: &DeviceView) -> Markup {
+    let caps = capabilities(dev);
+    if !caps.console && !caps.firmware_ota && !caps.config_backup {
+        return html! {};
+    }
     let id = &dev.id;
     html! {
         section.admin-panel {
             h2 { "Admin" }
-            div.admin-section.admin-console {
-                h3 { "Console" }
-                form hx-post=(format!("/device/{id}/console")) hx-target="#admin-result" hx-swap="outerHTML" {
-                    input type="text" name="command" placeholder="e.g. Status 8" required;
-                    button type="submit" { "Run" }
+            @if caps.console {
+                div.admin-section.admin-console {
+                    h3 { "Console" }
+                    form hx-post=(format!("/device/{id}/console")) hx-target="#admin-result" hx-swap="outerHTML" {
+                        input type="text" name="command" placeholder="e.g. Status 8" required;
+                        button type="submit" { "Run" }
+                    }
+                }
+                div.admin-section.admin-config {
+                    h3 { "Config" }
+                    form hx-post=(format!("/device/{id}/config/get")) hx-target="#admin-result" hx-swap="outerHTML" {
+                        input type="text" name="setting" placeholder="Setting name" required;
+                        button type="submit" { "Get" }
+                    }
+                    form hx-post=(format!("/device/{id}/config/set")) hx-target="#admin-result" hx-swap="outerHTML" {
+                        input type="text" name="setting" placeholder="Setting name" required;
+                        input type="text" name="value" placeholder="Value" required;
+                        button type="submit" class="btn-danger" { "Set" }
+                    }
                 }
             }
-            div.admin-section.admin-config {
-                h3 { "Config" }
-                form hx-post=(format!("/device/{id}/config/get")) hx-target="#admin-result" hx-swap="outerHTML" {
-                    input type="text" name="setting" placeholder="Setting name" required;
-                    button type="submit" { "Get" }
-                }
-                form hx-post=(format!("/device/{id}/config/set")) hx-target="#admin-result" hx-swap="outerHTML" {
-                    input type="text" name="setting" placeholder="Setting name" required;
-                    input type="text" name="value" placeholder="Value" required;
-                    button type="submit" class="btn-danger" { "Set" }
-                }
-            }
-            div.admin-section.admin-firmware {
-                h3 { "Firmware" }
-                form hx-post=(format!("/device/{id}/firmware/check")) hx-target="#admin-result" hx-swap="outerHTML" {
-                    button type="submit" { "Check version" }
-                }
-                form hx-post=(format!("/device/{id}/firmware/update")) hx-target="#admin-result" hx-swap="outerHTML" {
-                    input type="text" name="url" placeholder="OTA URL (optional)";
-                    button type="submit" class="btn-danger" { "Flash firmware" }
+            @if caps.firmware_ota {
+                div.admin-section.admin-firmware {
+                    h3 { "Firmware" }
+                    form hx-post=(format!("/device/{id}/firmware/check")) hx-target="#admin-result" hx-swap="outerHTML" {
+                        button type="submit" { "Check version" }
+                    }
+                    form hx-post=(format!("/device/{id}/firmware/update")) hx-target="#admin-result" hx-swap="outerHTML" {
+                        input type="text" name="url" placeholder="OTA URL (optional)";
+                        button type="submit" class="btn-danger" { "Flash firmware" }
+                    }
                 }
             }
-            div.admin-section.admin-backup {
-                h3 { "Backup" }
-                a.backup-link href=(format!("/device/{id}/backup")) { "Download config backup (.dmp)" }
-                button type="button" disabled title="Restore is disabled pending endpoint verification against a live device. Use the device web UI (Configuration > Backup/Restore) instead." {
-                    "Restore (unavailable)"
+            @if caps.config_backup {
+                div.admin-section.admin-backup {
+                    h3 { "Backup" }
+                    a.backup-link href=(format!("/device/{id}/backup")) { "Download config backup (.dmp)" }
+                    button type="button" disabled title="Restore is disabled pending endpoint verification against a live device. Use the device web UI (Configuration > Backup/Restore) instead." {
+                        "Restore (unavailable)"
+                    }
                 }
             }
             (admin_result(html! {}))
@@ -197,16 +213,22 @@ fn admin_panel(dev: &DeviceView) -> Markup {
 }
 
 /// Renders the full device detail page: relays, energy, firmware, network,
-/// uptime, MQTT, and the admin panel (console/config/firmware/backup).
-/// Every live field goes through `na()` (or the offline branch above it), so
-/// an offline device or a device with a sparse status never renders a
-/// coerced value.
+/// uptime, and the admin panel (console/config/firmware/backup). Every live
+/// field goes through `na()` (or the offline branch above it), so an offline
+/// device or a device with a sparse status never renders a coerced value.
+/// Energy, firmware, and the admin subsections are capability-gated (see
+/// `capabilities`) and simply absent when the device hasn't confirmed the
+/// matching capability - there is no MQTT section: `switchkit`'s
+/// vendor-neutral `DeviceSnapshot` has no MQTT data model at all, so a
+/// permanent-`n/a` MQTT section would only ever imply a capability that
+/// doesn't exist.
 pub fn device_page(dev: &DeviceView) -> Markup {
     html! {
         div.device-detail {
             header.device-header {
                 h1 { (dev.display_name()) }
                 span.host { (dev.host) }
+                (vendor_tag(dev.vendor))
                 (state_badge(dev))
             }
             (relays_section(dev))
@@ -214,7 +236,6 @@ pub fn device_page(dev: &DeviceView) -> Markup {
             (firmware_section(dev))
             (network_section(dev))
             (uptime_section(dev))
-            (mqtt_section(dev))
             div id="admin-panel" { (admin_panel(dev)) }
         }
     }

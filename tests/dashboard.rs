@@ -6,7 +6,9 @@ use std::path::PathBuf;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use switchkit::{DeviceSnapshot, Energy, Firmware, NetInfo, Relay, RelayState, Signal};
+use switchkit::{
+    Capabilities, DeviceSnapshot, Energy, Firmware, NetInfo, Relay, RelayState, Signal, Vendor,
+};
 use tasmota_web::config::{Config, DeviceConfig};
 use tasmota_web::fleet::device_id;
 use tasmota_web::routes;
@@ -39,6 +41,7 @@ async fn dashboard_renders_card_with_na_for_missing_energy() {
             host: host.clone(),
             password: None,
             protected: false,
+            vendor: Vendor::Tasmota,
         }],
         ..Config::default()
     };
@@ -84,13 +87,20 @@ async fn dashboard_renders_card_with_na_for_missing_energy() {
     );
 }
 
-/// A status with a PARTIAL energy block (some fields present, some absent)
-/// and a real Wi-Fi signal reading - the exact shape needed to prove present
+/// A status with a PARTIAL energy block (some fields present, some absent),
+/// a real Wi-Fi signal reading, and the `metering`/`firmware_ota`
+/// capabilities confirmed (so the capability-gated energy and firmware
+/// sections actually render) - the exact shape needed to prove present
 /// fields render their real values while absent ones render n/a, never 0.
 fn status_with_partial_energy(host: &str) -> DeviceSnapshot {
     DeviceSnapshot {
         host: host.into(),
         name: Some("Test Plug".into()),
+        capabilities: Capabilities {
+            metering: true,
+            firmware_ota: true,
+            ..Default::default()
+        },
         relays: vec![Relay {
             index: 0,
             state: RelayState::On,
@@ -118,16 +128,14 @@ fn status_with_partial_energy(host: &str) -> DeviceSnapshot {
     }
 }
 
-/// `switchkit`'s vendor-neutral `DeviceSnapshot` carries no MQTT data at all
-/// (a genuine, unavoidable capability gap vs. the old Tasmota-specific model -
-/// see `views::device::mqtt_section`), so the whole MQTT section is now
-/// hard-coded n/a unconditionally: there is no longer any status field to
-/// feed a live MQTT value through, so this can no longer be proven
-/// non-vacuously against a "device reports MQTT connected" fixture the way
-/// the pre-migration test did. This test instead asserts the section's
-/// unconditional n/a rendering directly.
+/// There is no MQTT section anymore: `switchkit`'s vendor-neutral
+/// `DeviceSnapshot` has no MQTT data model at all, so a permanent-n/a MQTT
+/// section would only ever imply a capability that doesn't exist - it was
+/// removed rather than kept hard-coded n/a. This test proves both halves of
+/// that: present fields render their real values, absent ones render n/a
+/// (never 0), and the page contains no MQTT section at all.
 #[tokio::test]
-async fn device_detail_renders_partial_status_with_na_and_mqtt_always_na() {
+async fn device_detail_renders_partial_status_with_na_and_no_mqtt_section() {
     let host = "192.0.2.31".to_string();
     let config = Config {
         devices: vec![DeviceConfig {
@@ -135,6 +143,7 @@ async fn device_detail_renders_partial_status_with_na_and_mqtt_always_na() {
             host: host.clone(),
             password: None,
             protected: false,
+            vendor: Vendor::Tasmota,
         }],
         ..Config::default()
     };
@@ -170,25 +179,219 @@ async fn device_detail_renders_partial_status_with_na_and_mqtt_always_na() {
     assert!(body.contains("192.0.2.31"), "ip should render");
     assert!(body.contains("63%"), "present Wi-Fi signal should render");
 
-    // Absent fields (voltage_v, today_kwh, total_kwh, net.hostname), the
-    // permanently-n/a "Yesterday" row, and all five permanently-n/a MQTT
-    // fields each render the muted n/a marker, never 0 or blank.
+    // Absent fields (voltage_v, today_kwh, total_kwh) and the permanently-n/a
+    // "Yesterday" row render the muted n/a marker inside the energy section,
+    // plus the absent net.hostname in the network section: 5 markers total.
     let na_count = body.matches(">n/a<").count();
-    assert!(
-        na_count >= 10,
-        "expected at least 10 n/a markers (4 absent fields + yesterday + 5 mqtt fields), got {na_count}"
+    assert_eq!(
+        na_count, 5,
+        "expected exactly 5 n/a markers (voltage, today, yesterday, total, hostname), got {na_count}"
     );
     assert!(
         !body.contains(">0<"),
         "absent numeric fields must never render as a bare 0"
     );
 
-    // The MQTT section is unconditionally n/a under switchkit's vendor-neutral
-    // model: no live MQTT value can leak, since there is no status field left
-    // to source one from.
+    // No MQTT section at all: switchkit's vendor-neutral DeviceSnapshot has
+    // no MQTT data model, so there is nothing honest to render there.
+    assert!(!body.contains("MQTT"), "MQTT section must not be rendered");
+}
+
+/// A Shelly-vendor device's Wi-Fi signal renders its real dBm reading, never
+/// a fabricated percentage, and the page carries a "Shelly" vendor tag. The
+/// device name deliberately avoids the word "Shelly" so the assertion below
+/// can only match the vendor tag, not the page title or device name.
+#[tokio::test]
+async fn device_detail_shelly_vendor_renders_dbm_never_percent() {
+    let host = "192.0.2.32".to_string();
+    let config = Config {
+        devices: vec![DeviceConfig {
+            name: "Test Plug".into(),
+            host: host.clone(),
+            password: None,
+            protected: false,
+            vendor: Vendor::Shelly,
+        }],
+        ..Config::default()
+    };
+    let state = AppState::new(config, PathBuf::from("unused.toml"));
+    let id = device_id(&host);
+
+    {
+        let mut fleet = state.inner.fleet.write().await;
+        let dev = fleet.devices.first_mut().expect("one device configured");
+        dev.reachable = true;
+        dev.status = Some(DeviceSnapshot {
+            host: host.clone(),
+            name: Some("Test Plug".into()),
+            capabilities: Capabilities {
+                metering: true,
+                console: true,
+                ..Default::default()
+            },
+            signal: Some(Signal::from_dbm(-60)),
+            energy: Some(Energy {
+                power_w: Some(5.0),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+    }
+
+    let app = routes::router(state, false);
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!("/device/{id}"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(body.contains(">Shelly<"), "vendor tag should show Shelly");
     assert!(
-        !body.contains(">true<"),
-        "mqtt connected must never leak a bool as text"
+        body.contains("-60 dBm"),
+        "signal should render the real dBm value"
+    );
+    assert!(
+        !body.contains('%'),
+        "a dBm-only signal must never render a fabricated percentage"
+    );
+    assert!(
+        body.contains("admin-console"),
+        "the confirmed console capability should render the console admin subsection"
+    );
+}
+
+/// The Tasmota-vendor equivalent: still renders its Wi-Fi signal as a
+/// percentage, and carries a "Tasmota" vendor tag - proving the rewrite
+/// didn't regress the pre-existing (and still correct) percent path.
+#[tokio::test]
+async fn device_detail_tasmota_vendor_still_renders_percent() {
+    let host = "192.0.2.33".to_string();
+    let config = Config {
+        devices: vec![DeviceConfig {
+            name: "Test Plug".into(),
+            host: host.clone(),
+            password: None,
+            protected: false,
+            vendor: Vendor::Tasmota,
+        }],
+        ..Config::default()
+    };
+    let state = AppState::new(config, PathBuf::from("unused.toml"));
+    let id = device_id(&host);
+
+    {
+        let mut fleet = state.inner.fleet.write().await;
+        let dev = fleet.devices.first_mut().expect("one device configured");
+        dev.reachable = true;
+        dev.status = Some(DeviceSnapshot {
+            host: host.clone(),
+            name: Some("Test Plug".into()),
+            signal: Some(Signal::from_quality_percent(80)),
+            ..Default::default()
+        });
+    }
+
+    let app = routes::router(state, false);
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!("/device/{id}"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(body.contains(">Tasmota<"), "vendor tag should show Tasmota");
+    assert!(
+        body.contains("80%"),
+        "signal should render the real percentage"
+    );
+    assert!(
+        !body.contains("dBm"),
+        "a percent-only signal must never render a fabricated dBm value"
+    );
+}
+
+/// A device with NO confirmed capabilities (offline, unpolled, or a bare
+/// device with no admin/metering surface) renders none of the
+/// capability-gated sections - they are absent, never shown as broken or
+/// disabled controls.
+#[tokio::test]
+async fn device_detail_without_capabilities_hides_gated_sections() {
+    let host = "192.0.2.34".to_string();
+    let config = Config {
+        devices: vec![DeviceConfig {
+            name: "Test Plug".into(),
+            host: host.clone(),
+            password: None,
+            protected: false,
+            vendor: Vendor::Shelly,
+        }],
+        ..Config::default()
+    };
+    let state = AppState::new(config, PathBuf::from("unused.toml"));
+    let id = device_id(&host);
+
+    {
+        let mut fleet = state.inner.fleet.write().await;
+        let dev = fleet.devices.first_mut().expect("one device configured");
+        dev.reachable = true;
+        dev.status = Some(DeviceSnapshot {
+            host: host.clone(),
+            name: Some("Test Plug".into()),
+            // Capabilities default to all-false: nothing confirmed.
+            ..Default::default()
+        });
+    }
+
+    let app = routes::router(state, false);
+    let response = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri(format!("/device/{id}"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+
+    assert!(
+        !body.contains("Energy"),
+        "energy section must be absent without metering"
+    );
+    assert!(
+        !body.contains("Firmware"),
+        "firmware section must be absent without firmware_ota"
+    );
+    assert!(
+        !body.contains("Admin"),
+        "admin panel must be absent with no confirmed admin capability"
+    );
+    // Non-gated sections still render.
+    assert!(
+        body.contains("Relays"),
+        "relays section is not capability-gated"
+    );
+    assert!(
+        body.contains("Network"),
+        "network section is not capability-gated"
     );
 }
 
