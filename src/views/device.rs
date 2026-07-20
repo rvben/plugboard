@@ -2,7 +2,9 @@ use maud::{Markup, html};
 use switchkit::{Capabilities, DeviceSnapshot, RelayState, Vendor};
 
 use crate::fleet::DeviceView;
-use crate::views::components::{na, signal_indicator, state_badge, vendor_tag};
+use crate::views::components::{
+    ToggleTarget, na, relay_control, signal_indicator, state_badge, vendor_tag,
+};
 
 /// The device's live status, or `None` when offline. Centralizes the same
 /// `reachable` guard `DeviceView::power_w`/`today_kwh`/`rssi` already apply,
@@ -37,12 +39,12 @@ fn relay_badge(state: &RelayState) -> Markup {
 fn relays_section(dev: &DeviceView) -> Markup {
     let relays = live_status(dev).map(|s| s.relays.as_slice()).unwrap_or(&[]);
     html! {
-        section.relays {
+        section.panel.relays {
             h2 { "Relays" }
             @if !dev.is_online() {
-                p { span.badge.offline { "offline" } }
+                p { span.badge.offline title=[dev.error.as_deref()] { "offline" } }
             } @else if relays.is_empty() {
-                p { "No relays reported." }
+                p.hint { "No relays reported." }
             } @else {
                 ul {
                     @for relay in relays {
@@ -60,17 +62,20 @@ fn relays_section(dev: &DeviceView) -> Markup {
 /// Rendered only when the device confirms `capabilities.metering` - a
 /// non-metering device has no energy data model at all, so showing this
 /// section (even full of `n/a`) would imply a capability the device does
-/// not have.
+/// not have. Leads with the live draw as a meter readout.
 fn energy_section(dev: &DeviceView) -> Markup {
     if !capabilities(dev).metering {
         return html! {};
     }
     let energy = live_status(dev).and_then(|s| s.energy.as_ref());
     html! {
-        section.energy {
+        section.panel.energy {
             h2 { "Energy" }
+            div.energy-hero {
+                span.value { (na(energy.and_then(|e| e.power_w))) }
+                span.unit { "W" }
+            }
             dl {
-                dt { "Power" } dd { (na(energy.and_then(|e| e.power_w))) " W" }
                 dt { "Voltage" } dd { (na(energy.and_then(|e| e.voltage_v))) " V" }
                 dt { "Current" } dd { (na(energy.and_then(|e| e.current_a))) " A" }
                 dt { "Today" } dd { (na(energy.and_then(|e| e.today_kwh))) " kWh" }
@@ -87,27 +92,10 @@ fn energy_section(dev: &DeviceView) -> Markup {
     }
 }
 
-/// Rendered only when the device confirms `capabilities.firmware_ota` -
-/// mirrors `energy_section`'s reasoning.
-fn firmware_section(dev: &DeviceView) -> Markup {
-    if !capabilities(dev).firmware_ota {
-        return html! {};
-    }
-    let firmware = live_status(dev)
-        .and_then(|s| s.firmware.as_ref())
-        .and_then(|f| f.version.clone());
-    html! {
-        section.firmware {
-            h2 { "Firmware" }
-            p { (na(firmware)) }
-        }
-    }
-}
-
 fn network_section(dev: &DeviceView) -> Markup {
     let net = live_status(dev).map(|s| &s.net);
     html! {
-        section.network {
+        section.panel.network {
             h2 { "Network" }
             dl {
                 dt { "IP" } dd { (na(net.and_then(|n| n.ip.clone()))) }
@@ -119,12 +107,23 @@ fn network_section(dev: &DeviceView) -> Markup {
     }
 }
 
-fn uptime_section(dev: &DeviceView) -> Markup {
+/// Uptime always; the firmware row only when the device confirms
+/// `capabilities.firmware_ota` (mirrors `energy_section`'s reasoning - the
+/// word "Firmware" must not appear for a device that hasn't confirmed it).
+fn system_section(dev: &DeviceView) -> Markup {
     let uptime = live_status(dev).and_then(|s| s.uptime.clone());
+    let firmware = live_status(dev)
+        .and_then(|s| s.firmware.as_ref())
+        .and_then(|f| f.version.clone());
     html! {
-        section.uptime {
-            h2 { "Uptime" }
-            p { (na(uptime)) }
+        section.panel.system {
+            h2 { "System" }
+            dl {
+                @if capabilities(dev).firmware_ota {
+                    dt { "Firmware" } dd { (na(firmware)) }
+                }
+                dt { "Uptime" } dd { (na(uptime)) }
+            }
         }
     }
 }
@@ -138,19 +137,19 @@ pub fn admin_result(content: Markup) -> Markup {
     html! { div id="admin-result" { (content) } }
 }
 
-/// The per-device admin panel (Task 8, now vendor-aware per Plan C Task 3):
-/// console, config get/set, firmware check/update, a config backup download
-/// link, and a disabled restore control. Every form targets `#admin-result`
-/// with an `outerHTML` swap; the handler behind each destructive action
-/// (`routes::admin`) decides whether to execute directly or return a confirm
-/// modal (an OOB swap into `#modal`) instead, classifying every command
-/// through the SAME shared `switchkit::guardrail::classify(dev.vendor, ..)`
-/// regardless of vendor - a Tasmota console command and a Shelly RPC method
-/// go through identical gating, never a vendor-specific bypass. `restore` has
-/// no route for any vendor: its upload endpoint is unverified against a live
-/// device (see `tasmota-cli`'s own `restore` refusal), so the control here is
-/// permanently disabled with an explanatory tooltip rather than wired to a
-/// handler that could report a false success.
+/// The per-device admin panel: console, config get/set, firmware
+/// check/update, a config backup download link, and a restore pointer.
+/// Every form targets `#admin-result` with an `outerHTML` swap; the handler
+/// behind each destructive action (`routes::admin`) decides whether to
+/// execute directly or return a confirm modal (an OOB swap into `#modal`)
+/// instead, classifying every command through the SAME shared
+/// `switchkit::guardrail::classify(dev.vendor, ..)` regardless of vendor - a
+/// Tasmota console command and a Shelly RPC method go through identical
+/// gating, never a vendor-specific bypass. `restore` has no route for any
+/// vendor: its upload endpoint is unverified against a live device (see
+/// `tasmota-cli`'s own `restore` refusal), so the panel points at the
+/// device's own web UI instead of offering a control that could report a
+/// false success.
 ///
 /// Console+Config are gated on `capabilities.console`, Firmware on
 /// `capabilities.firmware_ota`, Backup on `capabilities.config_backup` - a
@@ -177,31 +176,57 @@ fn admin_panel(dev: &DeviceView) -> Markup {
     // `Vendor` is `#[non_exhaustive]`; a future variant this app doesn't yet
     // know the command syntax for gets a vendor-neutral placeholder rather
     // than falsely implying Tasmota or Shelly syntax.
-    let (console_heading, console_placeholder) = match dev.vendor {
-        Vendor::Tasmota => ("Console", "e.g. Status 8"),
-        Vendor::Shelly => ("RPC console", "e.g. Shelly.GetStatus"),
-        _ => ("Console", "Enter a command"),
+    let (console_heading, console_hint, console_placeholder) = match dev.vendor {
+        Vendor::Tasmota => (
+            "Console",
+            "Runs a Tasmota console command on the device. Destructive commands ask for confirmation first.",
+            "e.g. Status 8",
+        ),
+        Vendor::Shelly => (
+            "RPC console",
+            "Calls a Shelly RPC method on the device. Destructive methods ask for confirmation first.",
+            "e.g. Shelly.GetStatus",
+        ),
+        _ => (
+            "Console",
+            "Runs a command on the device. Destructive commands ask for confirmation first.",
+            "Enter a command",
+        ),
     };
     html! {
-        section.admin-panel {
+        section.panel.admin-panel {
             h2 { "Admin" }
             @if caps.console {
                 div.admin-section.admin-console {
                     h3 { (console_heading) }
+                    p.hint { (console_hint) }
                     form hx-post=(format!("/device/{id}/console")) hx-target="#admin-result" hx-swap="outerHTML" {
-                        input type="text" name="command" placeholder=(console_placeholder) required;
+                        div.field {
+                            label for=(format!("console-{id}")) { "Command" }
+                            input.mono type="text" id=(format!("console-{id}")) name="command" placeholder=(console_placeholder) required;
+                        }
                         button type="submit" { "Run" }
                     }
                 }
                 div.admin-section.admin-config {
                     h3 { "Config" }
+                    p.hint { "Read or write one setting by name. Writes always ask for confirmation." }
                     form hx-post=(format!("/device/{id}/config/get")) hx-target="#admin-result" hx-swap="outerHTML" {
-                        input type="text" name="setting" placeholder="Setting name" required;
+                        div.field {
+                            label for=(format!("config-get-{id}")) { "Setting" }
+                            input.mono type="text" id=(format!("config-get-{id}")) name="setting" placeholder="Setting name" required;
+                        }
                         button type="submit" { "Get" }
                     }
                     form hx-post=(format!("/device/{id}/config/set")) hx-target="#admin-result" hx-swap="outerHTML" {
-                        input type="text" name="setting" placeholder="Setting name" required;
-                        input type="text" name="value" placeholder="Value" required;
+                        div.field {
+                            label for=(format!("config-set-{id}")) { "Setting" }
+                            input.mono type="text" id=(format!("config-set-{id}")) name="setting" placeholder="Setting name" required;
+                        }
+                        div.field {
+                            label for=(format!("config-value-{id}")) { "Value" }
+                            input.mono type="text" id=(format!("config-value-{id}")) name="value" placeholder="Value" required;
+                        }
                         button type="submit" class="btn-danger" { "Set" }
                     }
                 }
@@ -209,11 +234,15 @@ fn admin_panel(dev: &DeviceView) -> Markup {
             @if caps.firmware_ota {
                 div.admin-section.admin-firmware {
                     h3 { "Firmware" }
+                    p.hint { "Check the running version, or flash new firmware over the air." }
                     form hx-post=(format!("/device/{id}/firmware/check")) hx-target="#admin-result" hx-swap="outerHTML" {
                         button type="submit" { "Check version" }
                     }
                     form hx-post=(format!("/device/{id}/firmware/update")) hx-target="#admin-result" hx-swap="outerHTML" {
-                        input type="text" name="url" placeholder="OTA URL (optional)";
+                        div.field {
+                            label for=(format!("ota-{id}")) { "OTA URL (optional)" }
+                            input.mono type="text" id=(format!("ota-{id}")) name="url" placeholder="Device default when empty";
+                        }
                         button type="submit" class="btn-danger" { "Flash firmware" }
                     }
                 }
@@ -222,8 +251,8 @@ fn admin_panel(dev: &DeviceView) -> Markup {
                 div.admin-section.admin-backup {
                     h3 { "Backup" }
                     a.backup-link href=(format!("/device/{id}/backup")) { "Download config backup (.dmp)" }
-                    button type="button" disabled title="Restore is disabled pending endpoint verification against a live device. Use the device web UI (Configuration > Backup/Restore) instead." {
-                        "Restore (unavailable)"
+                    p.hint {
+                        "Restore is not offered here (its endpoint is unverified against a live device); use the device's own web UI (Configuration > Backup/Restore)."
                     }
                 }
             }
@@ -232,30 +261,60 @@ fn admin_panel(dev: &DeviceView) -> Markup {
     }
 }
 
-/// Renders the full device detail page: relays, energy, firmware, network,
-/// uptime, and the admin panel (console/config/firmware/backup). Every live
-/// field goes through `na()` (or the offline branch above it), so an offline
-/// device or a device with a sparse status never renders a coerced value.
-/// Energy, firmware, and the admin subsections are capability-gated (see
-/// `capabilities`) and simply absent when the device hasn't confirmed the
-/// matching capability - there is no MQTT section: `switchkit`'s
-/// vendor-neutral `DeviceSnapshot` has no MQTT data model at all, so a
-/// permanent-`n/a` MQTT section would only ever imply a capability that
-/// doesn't exist.
-pub fn device_page(dev: &DeviceView) -> Markup {
+/// The page header: name, host, vendor - and the live state badge plus the
+/// relay control, both derived from the last successful STATUS read only.
+/// The toggle discards its card-fragment response (`ToggleTarget::Discard`);
+/// `app.js` re-triggers the live region instead.
+fn device_header(dev: &DeviceView) -> Markup {
     html! {
-        div.device-detail {
-            header.device-header {
+        header.device-header {
+            div.device-title {
                 h1 { (dev.display_name()) }
                 span.host { (dev.host) }
                 (vendor_tag(dev.vendor))
-                (state_badge(dev))
             }
-            (relays_section(dev))
-            (energy_section(dev))
-            (firmware_section(dev))
-            (network_section(dev))
-            (uptime_section(dev))
+            div.device-actions {
+                (state_badge(dev))
+                (relay_control(dev, ToggleTarget::Discard))
+            }
+        }
+    }
+}
+
+/// Renders the full device detail page: header (with the relay control),
+/// live status panels, and the admin panel (console/config/firmware/backup).
+/// Every live field goes through `na()` (or the offline branch above it), so
+/// an offline device or a device with a sparse status never renders a
+/// coerced value. Energy, firmware, and the admin subsections are
+/// capability-gated (see `capabilities`) and simply absent when the device
+/// hasn't confirmed the matching capability - there is no MQTT section:
+/// `switchkit`'s vendor-neutral `DeviceSnapshot` has no MQTT data model at
+/// all, so a permanent-`n/a` MQTT section would only ever imply a capability
+/// that doesn't exist.
+///
+/// The header + status panels live in `#device-live`, which re-fetches
+/// itself every `poll_secs` (and on the `refresh-live` event a toggle
+/// fires): `hx-select` picks the same region out of the full page response,
+/// so the detail page tracks the poller without a manual reload. The admin
+/// panel deliberately sits OUTSIDE the live region - a refresh must never
+/// wipe console output mid-read.
+pub fn device_page(dev: &DeviceView, poll_secs: u64) -> Markup {
+    html! {
+        div.device-detail {
+            div.device-live id="device-live"
+                hx-get=(format!("/device/{}", dev.id))
+                hx-select="#device-live"
+                hx-target="this"
+                hx-swap="outerHTML"
+                hx-trigger=(format!("every {poll_secs}s, refresh-live from:body")) {
+                (device_header(dev))
+                div.device-panels {
+                    (relays_section(dev))
+                    (energy_section(dev))
+                    (network_section(dev))
+                    (system_section(dev))
+                }
+            }
             div id="admin-panel" { (admin_panel(dev)) }
         }
     }

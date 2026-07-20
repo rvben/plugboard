@@ -16,8 +16,17 @@ use crate::views::dashboard::device_card;
 use crate::views::{dashboard, layout};
 
 pub async fn index(State(state): State<AppState>, csrf: Csrf) -> Markup {
+    let chrome = layout::Chrome {
+        active: layout::Nav::Devices,
+        show_logout: state.builtin_auth().await,
+    };
     let fleet = state.inner.fleet.read().await;
-    layout::page("Dashboard", &csrf.0, dashboard::dashboard_page(&fleet))
+    layout::page(
+        "Dashboard",
+        &csrf.0,
+        chrome,
+        dashboard::dashboard_page(&fleet),
+    )
 }
 
 /// `GET /modal/close` - the Cancel button's direct target swap: an empty `#modal`,

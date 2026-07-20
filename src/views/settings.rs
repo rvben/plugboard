@@ -1,6 +1,6 @@
-//! Settings page (Task 10): the device list with per-device rename/remove/
+//! Settings page: the device list with per-device rename/remove/
 //! credential/protected controls, the poll interval, and a READ-ONLY
-//! auth-mode line.
+//! auth-mode section.
 //!
 //! Device credentials are write-only: `DeviceConfig.password` is never
 //! rendered into any field's `value` (only whether one is set, as a badge).
@@ -14,6 +14,7 @@ use maud::{Markup, html};
 
 use crate::config::{AuthConfig, AuthMode, Config, DeviceConfig};
 use crate::fleet::device_id;
+use crate::views::components::vendor_tag;
 
 fn auth_section(auth: &AuthConfig) -> Markup {
     let mode_label = match auth.mode {
@@ -21,7 +22,7 @@ fn auth_section(auth: &AuthConfig) -> Markup {
         AuthMode::Builtin => "builtin",
     };
     html! {
-        section.settings-auth {
+        section.panel.settings-auth {
             h2 { "Authentication" }
             dl {
                 dt { "Mode" }
@@ -46,13 +47,16 @@ fn auth_section(auth: &AuthConfig) -> Markup {
 
 fn poll_interval_section(secs: u64) -> Markup {
     html! {
-        section.settings-poll-interval {
+        section.panel.settings-poll-interval {
             h2 { "Poll interval" }
             form hx-post="/settings/poll-interval" hx-target="#settings-page" hx-swap="outerHTML" {
-                label for="secs" { "Seconds between polls" }
-                input type="number" id="secs" name="secs" min="1" value=(secs) required;
+                div.field {
+                    label for="secs" { "Seconds between polls" }
+                    input type="number" id="secs" name="secs" min="1" value=(secs) required;
+                }
                 button type="submit" { "Save" }
             }
+            p.hint { "How often every device is read for the dashboard, the detail pages, and metrics." }
         }
     }
 }
@@ -64,34 +68,41 @@ fn device_row(d: &DeviceConfig) -> Markup {
             div.device-summary {
                 span.device-name { (d.name) }
                 span.device-host { (d.host) }
+                (vendor_tag(d.vendor))
                 @if d.password.is_some() {
                     span.badge.credential-set { "credential set" }
                 }
-            }
-            form.settings-rename hx-post="/settings/device/rename" hx-target="#settings-page" hx-swap="outerHTML" {
-                input type="hidden" name="host" value=(d.host);
-                label for=(format!("name-{id}")) { "Name" }
-                input type="text" id=(format!("name-{id}")) name="name" value=(d.name) required;
-                button type="submit" { "Rename" }
-            }
-            form.settings-credentials hx-post="/settings/device/credentials" hx-target="#settings-page" hx-swap="outerHTML" {
-                input type="hidden" name="host" value=(d.host);
-                label for=(format!("password-{id}")) { "Password" }
-                input type="password" id=(format!("password-{id}")) name="password"
-                    placeholder="New password (blank clears it)" autocomplete="new-password";
-                button type="submit" { "Save credential" }
-            }
-            form.settings-protected hx-post="/settings/device/protected" hx-target="#settings-page" hx-swap="outerHTML" {
-                input type="hidden" name="host" value=(d.host);
-                label {
-                    input type="checkbox" name="protected" value="true" checked[d.protected];
-                    "Protected (require confirmation for writes)"
+                form.settings-remove hx-post="/settings/device/remove" hx-target="#settings-page" hx-swap="outerHTML" {
+                    input type="hidden" name="host" value=(d.host);
+                    button type="submit" class="btn-danger" { "Remove" }
                 }
-                button type="submit" { "Save" }
             }
-            form.settings-remove hx-post="/settings/device/remove" hx-target="#settings-page" hx-swap="outerHTML" {
-                input type="hidden" name="host" value=(d.host);
-                button type="submit" class="btn-danger" { "Remove" }
+            div.device-forms {
+                form.settings-rename hx-post="/settings/device/rename" hx-target="#settings-page" hx-swap="outerHTML" {
+                    input type="hidden" name="host" value=(d.host);
+                    div.field {
+                        label for=(format!("name-{id}")) { "Name" }
+                        input type="text" id=(format!("name-{id}")) name="name" value=(d.name) required;
+                    }
+                    button type="submit" { "Rename" }
+                }
+                form.settings-credentials hx-post="/settings/device/credentials" hx-target="#settings-page" hx-swap="outerHTML" {
+                    input type="hidden" name="host" value=(d.host);
+                    div.field {
+                        label for=(format!("password-{id}")) { "Device password" }
+                        input type="password" id=(format!("password-{id}")) name="password"
+                            placeholder="Blank clears it" autocomplete="new-password";
+                    }
+                    button type="submit" { "Save credential" }
+                }
+                form.settings-protected hx-post="/settings/device/protected" hx-target="#settings-page" hx-swap="outerHTML" {
+                    input type="hidden" name="host" value=(d.host);
+                    label {
+                        input type="checkbox" name="protected" value="true" checked[d.protected];
+                        "Protected (require confirmation for writes)"
+                    }
+                    button type="submit" { "Save" }
+                }
             }
         }
     }
@@ -103,9 +114,8 @@ fn devices_section(devices: &[DeviceConfig]) -> Markup {
             h2 { "Devices" }
             @if devices.is_empty() {
                 p.empty {
-                    "No devices configured. Add one from "
-                    a href="/discover" { "Discover" }
-                    "."
+                    strong { "No devices configured" }
+                    span { "Add one from " a href="/discover" { "Discover" } "." }
                 }
             } @else {
                 ul.settings-device-list {
@@ -126,10 +136,12 @@ fn devices_section(devices: &[DeviceConfig]) -> Markup {
 pub fn settings_page(config: &Config) -> Markup {
     html! {
         div.settings-page id="settings-page" {
-            h1 { "Settings" }
-            (auth_section(&config.auth))
-            (poll_interval_section(config.poll_interval_secs))
+            header.page-header {
+                h1 { "Settings" }
+            }
             (devices_section(&config.devices))
+            (poll_interval_section(config.poll_interval_secs))
+            (auth_section(&config.auth))
         }
     }
 }

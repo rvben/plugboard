@@ -14,6 +14,11 @@ pub async fn detail(
     Path(id): Path<String>,
     csrf: Csrf,
 ) -> Result<Markup, AppError> {
+    let chrome = layout::Chrome {
+        active: layout::Nav::Devices,
+        show_logout: state.builtin_auth().await,
+    };
+    let poll_secs = state.inner.config.read().await.poll_interval_secs;
     let fleet = state.inner.fleet.read().await;
     let dev = fleet
         .get(&id)
@@ -21,6 +26,7 @@ pub async fn detail(
     Ok(layout::page(
         dev.display_name(),
         &csrf.0,
-        device::device_page(dev),
+        chrome,
+        device::device_page(dev, poll_secs),
     ))
 }

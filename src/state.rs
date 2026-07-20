@@ -75,6 +75,13 @@ impl AppState {
         }
     }
 
+    /// Whether the app runs builtin (username/password) auth. The layout
+    /// offers Sign out only then: in proxy mode the reverse proxy owns the
+    /// session, so a local sign-out would do nothing but confuse.
+    pub async fn builtin_auth(&self) -> bool {
+        self.inner.config.read().await.auth.mode == crate::config::AuthMode::Builtin
+    }
+
     /// Build a device target with credentials from the current config.
     pub async fn target_for(&self, host: &str) -> DeviceTarget {
         let cfg = self.inner.config.read().await;

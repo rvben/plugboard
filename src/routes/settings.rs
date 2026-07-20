@@ -24,8 +24,17 @@ use crate::views::{layout, settings};
 
 /// `GET /settings`.
 pub async fn index(State(state): State<AppState>, csrf: Csrf) -> Markup {
+    let chrome = layout::Chrome {
+        active: layout::Nav::Settings,
+        show_logout: state.builtin_auth().await,
+    };
     let config = state.inner.config.read().await;
-    layout::page("Settings", &csrf.0, settings::settings_page(&config))
+    layout::page(
+        "Settings",
+        &csrf.0,
+        chrome,
+        settings::settings_page(&config),
+    )
 }
 
 /// Re-renders the `#settings-page` fragment from the current config. Every

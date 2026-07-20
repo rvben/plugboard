@@ -1,6 +1,6 @@
-//! Device discovery page (Task 9, mixed-vendor per Plan C Task 3): a CIDR
-//! scan form, its results, and an "Add" action per found device. `results`
-//! deliberately takes `(display_name, host, vendor)` triples rather than
+//! Device discovery page (mixed-vendor): a CIDR scan form, its results, and
+//! an "Add" action per found device. `results` deliberately takes
+//! `(display_name, host, vendor)` triples rather than
 //! `switchkit::Discovered`, so this view carries no device-status coupling
 //! and is trivially testable with documentation IPs (see `tests/discover.rs`).
 //!
@@ -22,9 +22,11 @@ use crate::views::components::vendor_tag;
 fn scan_form(default_range: &str) -> Markup {
     html! {
         form.discover-form hx-post="/discover/scan" hx-target="#discover-results" hx-swap="innerHTML" {
-            label for="range" { "CIDR range" }
-            input type="text" id="range" name="range" value=(default_range) required;
-            button type="submit" { "Scan" }
+            div.field {
+                label for="range" { "CIDR range" }
+                input.mono type="text" id="range" name="range" value=(default_range) required;
+            }
+            button type="submit" class="btn-primary" { "Scan" }
         }
     }
 }
@@ -36,7 +38,10 @@ fn scan_form(default_range: &str) -> Markup {
 pub fn results(found: &[(String, String, Vendor)]) -> Markup {
     html! {
         @if found.is_empty() {
-            p.empty { "No devices found. Check the range and try again." }
+            p.empty {
+                strong { "No devices found" }
+                span { "Check the range and try again." }
+            }
         } @else {
             ul.discover-results-list {
                 @for (name, host, vendor) in found {
@@ -47,7 +52,7 @@ pub fn results(found: &[(String, String, Vendor)]) -> Markup {
                         form hx-post="/discover/add" hx-target=(format!("#discover-row-{}", device_id(host))) hx-swap="outerHTML" {
                             input type="hidden" name="name" value=(name);
                             input type="hidden" name="host" value=(host);
-                            button type="submit" { "Add" }
+                            button type="submit" class="btn-primary" { "Add" }
                         }
                     }
                 }
@@ -61,7 +66,14 @@ pub fn results(found: &[(String, String, Vendor)]) -> Markup {
 pub fn page(default_range: &str) -> Markup {
     html! {
         div.discover-page {
-            h1 { "Discover devices" }
+            header.page-header {
+                div {
+                    h1 { "Discover devices" }
+                    p.subtitle {
+                        "Scan a network range for Tasmota and Shelly devices, then add them to the fleet. Scanning a /24 takes a few seconds."
+                    }
+                }
+            }
             (scan_form(default_range))
             div id="discover-results" {}
         }

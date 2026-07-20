@@ -1,9 +1,22 @@
 use std::fmt::Display;
 
-use maud::{Markup, html};
+use maud::{Markup, PreEscaped, html};
 use switchkit::{RelayState, Signal, Vendor};
 
 use crate::fleet::DeviceView;
+
+/// The IEC standby symbol as an inline SVG, the app's one brand mark (topbar,
+/// login, empty states). `currentColor` so it takes the surrounding text or
+/// accent color.
+pub fn power_mark(size: u32) -> Markup {
+    html! {
+        (PreEscaped(format!(
+            "<svg width=\"{size}\" height=\"{size}\" viewBox=\"0 0 24 24\" fill=\"none\" \
+             stroke=\"currentColor\" stroke-width=\"2.4\" stroke-linecap=\"round\" \
+             aria-hidden=\"true\"><path d=\"M12 3.5v8\"/><path d=\"M7 6.2a7.5 7.5 0 1 0 10 0\"/></svg>"
+        )))
+    }
+}
 
 /// Render `Some(v)` as-is, `None` as a muted "n/a" span. Never coerces an
 /// absent value to `0` or an empty string.
@@ -14,10 +27,12 @@ pub fn na<T: Display>(v: Option<T>) -> Markup {
     }
 }
 
-/// Renders the device's on/off/unknown/offline badge.
+/// Renders the device's on/off/unknown/offline badge. An offline badge
+/// carries the scrubbed poll error as a tooltip when one is known, so the
+/// failure reason is one hover away without cluttering the card.
 pub fn state_badge(dev: &DeviceView) -> Markup {
     if !dev.is_online() {
-        return html! { span.badge.offline { "offline" } };
+        return html! { span.badge.offline title=[dev.error.as_deref()] { "offline" } };
     }
     // Reachable: the relay comes from the fresh status ONLY (never a carried-over
     // value); an empty/unconfirmable relay renders `unknown`, not a guess.
@@ -118,6 +133,62 @@ pub fn vendor_tag(vendor: Vendor) -> Markup {
     html! { span.vendor-tag { (label) } }
 }
 
+/// Where a relay-toggle form should apply the card fragment the toggle route
+/// returns.
+pub enum ToggleTarget<'a> {
+    /// Replace the dashboard card (`#card-{id}`) with the returned card.
+    Card(&'a str),
+    /// Discard the returned card fragment (`hx-swap="none"`): the device
+    /// detail page re-renders its own live region instead. The response's
+    /// OOB toast/modal swaps still apply.
+    Discard,
+}
+
+/// The relay toggle control: a real switch when the relay state is CONFIRMED
+/// by the last successful STATUS read, a plain "Toggle" button when the
+/// device is online but the relay is unknown, and a disabled button when the
+/// device is unreachable. A switch never fakes a position: its checked state
+/// comes from live status only, exactly like `state_badge`.
+pub fn relay_control(dev: &DeviceView, target: ToggleTarget) -> Markup {
+    let relay = if dev.is_online() {
+        dev.status
+            .as_ref()
+            .and_then(|s| s.relays.first())
+            .map(|r| &r.state)
+    } else {
+        None
+    };
+    let name = dev.display_name();
+    let (hx_target, hx_swap, on_detail_page) = match target {
+        ToggleTarget::Card(id) => (Some(format!("#card-{id}")), "outerHTML", false),
+        ToggleTarget::Discard => (None, "none", true),
+    };
+    html! {
+        form.control-row.device-toggle[on_detail_page]
+            hx-post=(format!("/device/{}/toggle", dev.id))
+            hx-target=[hx_target]
+            hx-swap=(hx_swap) {
+            span.control-label { "Power" }
+            @match relay {
+                Some(RelayState::On) => {
+                    button.switch type="submit" role="switch" aria-checked="true"
+                        aria-label=(format!("Turn {name} off")) {}
+                }
+                Some(RelayState::Off) => {
+                    button.switch type="submit" role="switch" aria-checked="false"
+                        aria-label=(format!("Turn {name} on")) {}
+                }
+                Some(RelayState::Unknown(_)) => {
+                    button.btn-toggle type="submit" { "Toggle" }
+                }
+                None => {
+                    button.btn-toggle type="submit" disabled[!dev.is_online()] { "Toggle" }
+                }
+            }
+        }
+    }
+}
+
 /// A confirmation modal, rendered as an OUT-OF-BAND swap into the layout's `#modal`
 /// placeholder, so opening it never disturbs the page or the card. The confirm form
 /// re-posts `action` with `confirmed=true` plus `hidden` (the original validated
@@ -128,8 +199,8 @@ pub fn confirm_modal(title: &str, action: &str, hidden: &[(&str, &str)], target:
     html! {
         div id="modal" hx-swap-oob="true" {
             div.modal-backdrop {
-                div.modal role="dialog" aria-modal="true" {
-                    h2 { (title) }
+                div.modal role="dialog" aria-modal="true" aria-labelledby="modal-title" {
+                    h2 id="modal-title" { (title) }
                     form hx-post=(action) hx-target=(target) hx-swap="outerHTML" {
                         input type="hidden" name="confirmed" value="true";
                         @for (k, v) in hidden {
@@ -173,16 +244,23 @@ pub fn bulk_toast(switched: usize, failed: usize) -> Markup {
 /// Out-of-band toast with an Undo action (a toggle is its own inverse, so this
 /// switches back). `confirmed=true` via hx-vals so undo also works on protected
 /// devices without another modal. `hx-swap-oob` injects it into `#toasts`.
+///
+/// The Undo button discards its direct response (`hx-swap="none"`) instead of
+/// targeting `#card-{id}`: the toast appears on BOTH the dashboard and the
+/// device detail page, and on the latter there is no card to target - htmx
+/// would raise `targetError` and never send the request. The toggle route's
+/// `state.notify()` pushes the updated card over SSE immediately, and the
+/// `device-toggle` class makes the detail page's live region refresh itself
+/// (see `app.js`), so both surfaces update without a direct swap.
 pub fn undo_toast(id: &str, new_state: &str) -> Markup {
     html! {
         div id="toasts" hx-swap-oob="beforeend:#toasts" {
             div.toast {
                 span { "Switched to " (new_state) }
-                button.undo
+                button.undo.device-toggle
                     hx-post=(format!("/device/{id}/toggle"))
                     hx-vals=r#"{"confirmed":"true"}"#
-                    hx-target=(format!("#card-{id}"))
-                    hx-swap="outerHTML" { "Undo" }
+                    hx-swap="none" { "Undo" }
             }
         }
     }

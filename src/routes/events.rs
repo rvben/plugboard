@@ -1,7 +1,9 @@
 //! The `/events` SSE stream: pushes each device's card HTML as a named
 //! `device-{id}` event so htmx's `sse-swap="device-{id}"` on that card swaps
-//! it in place. Renders an initial burst on connect (so a newly-connected
-//! browser sees current state immediately) and one burst per poller tick.
+//! it in place, plus one `summary` event per burst for the dashboard's fleet
+//! strip (`sse-swap="summary"`). Renders an initial burst on connect (so a
+//! newly-connected browser sees current state immediately) and one burst per
+//! poller tick.
 
 use std::convert::Infallible;
 
@@ -11,18 +13,22 @@ use futures::stream::Stream;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::state::AppState;
-use crate::views::dashboard::device_card;
+use crate::views::dashboard::{device_card, fleet_summary};
 
 /// Snapshot the fleet under a short-lived read lock and render every device's
-/// card. The lock is dropped before returning, so it is never held across an
-/// `.await` in the stream below.
+/// card plus the fleet summary, as `(event name, html)` pairs. The lock is
+/// dropped before returning, so it is never held across an `.await` in the
+/// stream below.
 async fn render_all_cards(state: &AppState) -> Vec<(String, String)> {
     let fleet = state.inner.fleet.read().await;
-    fleet
-        .devices
-        .iter()
-        .map(|d| (d.id.clone(), device_card(d).into_string()))
-        .collect()
+    let mut events = vec![("summary".to_string(), fleet_summary(&fleet).into_string())];
+    events.extend(
+        fleet
+            .devices
+            .iter()
+            .map(|d| (format!("device-{}", d.id), device_card(d).into_string())),
+    );
+    events
 }
 
 pub async fn stream(
@@ -32,16 +38,17 @@ pub async fn stream(
     let s = async_stream::stream! {
         // Initial burst: a newly-connected browser must see current state
         // without waiting for the next poller tick.
-        for (id, html) in render_all_cards(&state).await {
-            yield Ok(Event::default().event(format!("device-{id}")).data(html));
+        for (name, html) in render_all_cards(&state).await {
+            yield Ok(Event::default().event(name).data(html));
         }
 
         loop {
             match rx.recv().await {
                 Ok(()) => {
-                    // Render one SSE event per device card; htmx `sse-swap` matches by name.
-                    for (id, html) in render_all_cards(&state).await {
-                        yield Ok(Event::default().event(format!("device-{id}")).data(html));
+                    // Render one SSE event per swap unit (summary + each device
+                    // card); htmx `sse-swap` matches by name.
+                    for (name, html) in render_all_cards(&state).await {
+                        yield Ok(Event::default().event(name).data(html));
                     }
                 }
                 // A slow client that missed ticks: skip, do not disconnect.

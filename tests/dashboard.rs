@@ -258,8 +258,11 @@ async fn device_detail_shelly_vendor_renders_dbm_never_percent() {
         body.contains("-60 dBm"),
         "signal should render the real dBm value"
     );
+    // The layout's inline-SVG favicon data URI is percent-encoded, so a bare
+    // `contains('%')` would false-positive on chrome markup; the honest check
+    // is that no percent-form SIGNAL markup exists for a dBm-only reading.
     assert!(
-        !body.contains('%'),
+        !body.contains("signal-pct"),
         "a dBm-only signal must never render a fabricated percentage"
     );
     assert!(

@@ -68,9 +68,13 @@ const RANGE_PLACEHOLDER: &str = "192.0.2.0/24";
 
 /// `GET /discover` - the CIDR scan form, pre-filled with the host's detected
 /// local subnet, or `RANGE_PLACEHOLDER` when detection fails.
-pub async fn index(csrf: Csrf) -> Markup {
+pub async fn index(State(state): State<AppState>, csrf: Csrf) -> Markup {
+    let chrome = layout::Chrome {
+        active: layout::Nav::Discover,
+        show_logout: state.builtin_auth().await,
+    };
     let default_range = switchkit::detect_local_cidr().unwrap_or_else(|| RANGE_PLACEHOLDER.into());
-    layout::page("Discover", &csrf.0, discover::page(&default_range))
+    layout::page("Discover", &csrf.0, chrome, discover::page(&default_range))
 }
 
 #[derive(Deserialize)]

@@ -1,13 +1,15 @@
-/* tasmota-web design system.
+/* plugboard design system.
    A phone-first, WCAG-AA, light/dark stylesheet for a smart-plug control
    panel. Every color, space, radius, type size, and shadow used below is a
-   token defined in :root (overridden for dark in the prefers-color-scheme
-   block) - nothing outside this file's token section hard-codes a color.
+   token defined in :root - nothing outside this file's token section
+   hard-codes a color. Light and dark resolve through light-dark(), keyed off
+   `color-scheme` (evergreen browsers only, like the rest of this app).
 
    Visual language: an "instrument panel" for electricity. Numeric readouts
-   (watts, kWh, RSSI) use a monospace face like a meter display; state
-   badges pair color with a shape glyph (filled/hollow/half/slashed circle)
-   so on/off/unknown/offline never depend on color alone. */
+   (watts, kWh, dBm) use a monospace face with tabular numerals like a meter
+   display; state badges pair color with a shape glyph (filled/hollow/half/
+   slashed circle) so on/off/unknown/offline never depend on color alone; the
+   one deliberate use of light is the soft glow on a live "on" state. */
 
 /* ---------- Tokens ---------- */
 
@@ -15,34 +17,39 @@
   color-scheme: light dark;
 
   /* Color: surfaces, text, borders. */
-  --bg: #f2f4f7;
-  --surface: #ffffff;
-  --surface-muted: #eaedf2;
-  --text: #12161f;
-  --muted: #5b6472;
-  --border: #dfe3e9;
-  --border-strong: #8d96a5;
+  --bg: light-dark(oklch(96.5% 0.006 255), oklch(16% 0.014 262));
+  --surface: light-dark(#fff, oklch(20.5% 0.016 262));
+  --surface-muted: light-dark(oklch(94.5% 0.008 255), oklch(24.5% 0.018 262));
+  --text: light-dark(oklch(23% 0.02 260), oklch(93% 0.007 255));
+  --muted: light-dark(oklch(46% 0.02 258), oklch(72% 0.014 255));
+  --border: light-dark(oklch(89.5% 0.009 252), oklch(29.5% 0.018 262));
+  --border-strong: light-dark(oklch(75% 0.015 252), oklch(43% 0.018 262));
 
-  /* Color: accent (links, primary actions, focus ring). */
-  --accent: #2f5fdb;
-  --accent-strong: #1e46b8;
-  --accent-contrast: #ffffff;
+  /* Color: accent. Reserved for primary actions, links, selection, and
+     focus - never decoration, so state colors keep their meaning. */
+  --accent: light-dark(oklch(50% 0.19 262), oklch(76% 0.115 262));
+  --accent-strong: light-dark(oklch(43.5% 0.19 262), oklch(82% 0.1 262));
+  --accent-contrast: light-dark(#fff, oklch(18% 0.03 262));
 
-  /* Color: relay/reachability state. Each also gets a shape glyph, never
-     color alone (see .badge below). */
-  --on: #147a46;
-  --off: #5f6b7a;
-  --unknown: #b5590a;
-  --offline: #c02626;
+  /* Color: relay/reachability state. The plain tokens are TEXT colors (AA on
+     their own tinted pill and on the page surfaces); the -solid variants fill
+     larger shapes (switch track, glyphs). Each state also gets a shape glyph,
+     never color alone (see .badge below). */
+  --on: light-dark(oklch(43% 0.115 155), oklch(80% 0.15 155));
+  --on-solid: light-dark(oklch(56% 0.135 152), oklch(66% 0.145 152));
+  --off: var(--muted);
+  --unknown: light-dark(oklch(51% 0.11 60), oklch(81% 0.12 78));
+  --offline: light-dark(oklch(49% 0.16 27), oklch(76% 0.125 22));
 
-  /* Color: destructive actions reuse the offline red - one semantic for
-     "critical/irreversible", one token to keep it in sync. */
-  --danger: var(--offline);
-  --danger-strong: #9c1d1d;
-  --danger-contrast: #ffffff;
+  /* Color: destructive actions. Filled buttons, so -contrast text rides on
+     top; distinct from --offline (which is a text color). */
+  --danger: light-dark(oklch(50% 0.17 27), oklch(56% 0.17 27));
+  --danger-strong: light-dark(oklch(43.5% 0.17 27), oklch(50% 0.17 27));
+  --danger-contrast: #fff;
 
   /* Type. System stacks only, no runtime-fetched fonts. The mono face is
-     used for numeric readouts, the sans face for everything else. */
+     used for numeric readouts and host/command text, sans for everything
+     else. */
   --font-sans:
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
     Arial, sans-serif;
@@ -50,13 +57,13 @@
     ui-monospace, "SF Mono", "Cascadia Code", "Roboto Mono", Menlo, Consolas,
     monospace;
 
-  --text-xs: 0.75rem; /* 12px: captions, eyebrow labels */
-  --text-sm: 0.8125rem; /* 13px: secondary text, badges */
+  --text-xs: 0.75rem; /* 12px: micro labels, chips */
+  --text-sm: 0.8125rem; /* 13px: secondary text, badges, buttons */
   --text-base: 0.9375rem; /* 15px: body */
   --text-md: 1.0625rem; /* 17px: card name, emphasis */
-  --text-lg: 1.25rem; /* 20px: section headings */
-  --text-xl: 1.5rem; /* 24px: page heading (mobile) */
-  --text-2xl: 1.875rem; /* 30px: page heading (desktop) */
+  --text-lg: 1.25rem; /* 20px: section headings, card readout */
+  --text-xl: 1.5rem; /* 24px: page heading, hero readout (mobile) */
+  --text-2xl: 1.75rem; /* 28px: hero readout (desktop) */
 
   /* Space: a 4px scale. */
   --space-1: 0.25rem;
@@ -67,45 +74,34 @@
   --space-6: 2rem;
   --space-8: 3rem;
 
-  --radius-sm: 6px;
+  --radius-sm: 7px;
   --radius-md: 10px;
-  --radius-lg: 16px;
+  --radius-lg: 14px;
   --radius-pill: 999px;
 
-  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.1);
-  --shadow-lg: 0 16px 48px rgba(15, 23, 42, 0.22);
+  --shadow-sm: 0 1px 2px light-dark(oklch(25% 0.02 260 / 0.06), oklch(0% 0 0 / 0.3));
+  --shadow-md:
+    0 2px 4px light-dark(oklch(25% 0.02 260 / 0.05), oklch(0% 0 0 / 0.3)),
+    0 8px 24px light-dark(oklch(25% 0.02 260 / 0.08), oklch(0% 0 0 / 0.4));
+  --shadow-lg:
+    0 4px 12px light-dark(oklch(25% 0.02 260 / 0.08), oklch(0% 0 0 / 0.4)),
+    0 24px 64px light-dark(oklch(25% 0.02 260 / 0.2), oklch(0% 0 0 / 0.55));
 
-  --transition-fast: 120ms ease;
-  --transition-base: 200ms ease;
+  /* Motion: quick, decisive ease-outs. State feedback, never choreography. */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --transition-fast: 130ms var(--ease-out);
+  --transition-base: 220ms var(--ease-out);
+
+  /* z-index scale: one place, no arbitrary values. */
+  --z-topbar: 10;
+  --z-modal: 40;
+  --z-toast: 50;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #10131a;
-    --surface: #1a1e27;
-    --surface-muted: #232833;
-    --text: #e7eaf0;
-    --muted: #9aa3b2;
-    --border: #2c323f;
-    --border-strong: #5f6a80;
-
-    --accent: #7ea1ff;
-    --accent-strong: #9fbaff;
-    --accent-contrast: #0b1220;
-
-    --on: #157a45;
-    --off: #545b68;
-    --unknown: #a1570c;
-    --offline: #b23434;
-
-    --danger-strong: #c94040;
-    --danger-contrast: #ffffff;
-
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
-    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.45);
-    --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.55);
-  }
+/* Cross-document fade between server-rendered pages (progressive; browsers
+   without view transitions just navigate). */
+@view-transition {
+  navigation: auto;
 }
 
 /* ---------- Reset and base ---------- */
@@ -134,9 +130,10 @@ h1,
 h2,
 h3 {
   margin: 0 0 var(--space-3);
-  font-weight: 700;
+  font-weight: 650;
   line-height: 1.25;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
+  text-wrap: balance;
 }
 
 h1 {
@@ -144,11 +141,11 @@ h1 {
 }
 
 h2 {
-  font-size: var(--text-lg);
+  font-size: var(--text-md);
 }
 
 h3 {
-  font-size: var(--text-md);
+  font-size: var(--text-base);
 }
 
 p {
@@ -168,6 +165,10 @@ ul {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+svg {
+  flex: none;
 }
 
 /* Visible keyboard focus everywhere, without a permanent ring for mouse
@@ -200,20 +201,29 @@ ul {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-4);
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: var(--z-topbar);
 }
 
 .topbar .brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   font-weight: 700;
   font-size: var(--text-md);
   color: var(--text);
   letter-spacing: -0.01em;
+  padding: var(--space-1) 0;
+}
+
+.topbar .brand svg {
+  color: var(--accent);
 }
 
 .topbar .brand:hover {
@@ -223,7 +233,8 @@ ul {
 
 .topbar nav {
   display: flex;
-  gap: var(--space-2);
+  align-items: center;
+  gap: var(--space-1);
 }
 
 .topbar nav a {
@@ -232,12 +243,40 @@ ul {
   font-weight: 600;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
+  transition:
+    color var(--transition-fast),
+    background var(--transition-fast);
 }
 
 .topbar nav a:hover {
   color: var(--text);
   background: var(--surface-muted);
   text-decoration: none;
+}
+
+.topbar nav a[aria-current="page"] {
+  color: var(--text);
+  background: var(--surface-muted);
+}
+
+/* Sign out is a form so it can POST; its button dresses as a nav link. */
+.topbar nav form {
+  margin: 0;
+}
+
+.topbar nav button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: var(--space-2) var(--space-3);
+  min-height: 0;
+}
+
+.topbar nav button:hover {
+  color: var(--text);
+  background: var(--surface-muted);
 }
 
 main {
@@ -248,7 +287,7 @@ main {
 
 @media (min-width: 640px) {
   .topbar {
-    padding: var(--space-3) var(--space-5);
+    padding: var(--space-2) var(--space-5);
   }
 
   main {
@@ -262,14 +301,30 @@ main {
   }
 }
 
+/* Page header: title + optional subtitle and actions, shared by every page. */
+.page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.page-header h1 {
+  margin: 0;
+}
+
+.page-header .subtitle {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin: var(--space-1) 0 0;
+  max-width: 65ch;
+}
+
 .hint {
   color: var(--muted);
   font-size: var(--text-sm);
-}
-
-.empty {
-  color: var(--muted);
-  padding: var(--space-4) 0;
 }
 
 /* Absent-value marker: quiet and unmistakably not a real number. Shares the
@@ -282,6 +337,31 @@ main {
   opacity: 0.85;
 }
 
+/* Empty states teach the next step instead of leaving blank space. */
+.empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  text-align: center;
+  color: var(--muted);
+  padding: var(--space-8) var(--space-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  margin: 0;
+}
+
+.empty svg {
+  color: var(--border-strong);
+  margin-bottom: var(--space-1);
+}
+
+.empty strong {
+  color: var(--text);
+  font-size: var(--text-md);
+}
+
 /* ---------- Buttons ---------- */
 
 button,
@@ -290,10 +370,11 @@ button,
   font-size: var(--text-sm);
   font-weight: 600;
   color: var(--text);
-  background: var(--surface-muted);
+  background: var(--surface);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-4);
+  min-height: 2.25rem;
   cursor: pointer;
   transition:
     background var(--transition-fast),
@@ -306,13 +387,12 @@ button,
 }
 
 .backup-link {
-  display: inline-flex;
   text-decoration: none;
 }
 
 button:hover,
 .backup-link:hover {
-  background: var(--border);
+  background: var(--surface-muted);
   text-decoration: none;
 }
 
@@ -322,8 +402,19 @@ button:active {
 
 button:disabled {
   cursor: not-allowed;
-  opacity: 0.5;
+  opacity: 0.55;
   transform: none;
+}
+
+button.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+button.btn-primary:hover {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
 }
 
 button.btn-danger {
@@ -339,7 +430,7 @@ button.btn-danger:hover {
 
 button.btn-cancel {
   background: transparent;
-  border-color: var(--border);
+  border-color: transparent;
   color: var(--muted);
 }
 
@@ -348,9 +439,7 @@ button.btn-cancel:hover {
   color: var(--text);
 }
 
-/* The single-purpose primary action on its page gets the accent treatment;
-   every other button stays neutral so a grid of a dozen cards never turns
-   into a wall of blue. */
+/* The single-purpose primary action on the login page. */
 .login-form button[type="submit"] {
   background: var(--accent);
   border-color: var(--accent);
@@ -372,7 +461,7 @@ form.htmx-request button[type="submit"] {
   position: relative;
 }
 
-form.htmx-request button[type="submit"]::after {
+form.htmx-request button[type="submit"]:not(.switch)::after {
   content: "";
   width: 0.85em;
   height: 0.85em;
@@ -383,7 +472,7 @@ form.htmx-request button[type="submit"]::after {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  form.htmx-request button[type="submit"]::after {
+  form.htmx-request button[type="submit"]:not(.switch)::after {
     animation: none;
     opacity: 0.6;
   }
@@ -393,6 +482,72 @@ form.htmx-request button[type="submit"]::after {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* ---------- Switch (relay control) ---------- */
+
+/* A real switch affordance for a confirmed on/off relay. The track color IS
+   the live relay state (from the last successful STATUS read only); when the
+   relay is unknown or the device offline, the card renders a plain button or
+   nothing instead - a switch never fakes a position. The 9px transparent
+   padding keeps the visible track compact while the tap target stays 44px. */
+button.switch {
+  padding: 9px;
+  width: 60px;
+  min-height: 44px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  background-clip: content-box;
+  position: relative;
+  transition: opacity var(--transition-fast);
+}
+
+button.switch:hover {
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+
+button.switch::after {
+  content: "";
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  transition: translate var(--transition-base);
+}
+
+button.switch[aria-checked="true"] {
+  background: var(--on-solid);
+  background-clip: content-box;
+}
+
+button.switch[aria-checked="true"]::after {
+  translate: 16px 0;
+}
+
+form.htmx-request button.switch {
+  opacity: 0.6;
+}
+
+/* The control row a switch sits in (card footer, device header). */
+.control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  margin: 0;
+}
+
+.control-row .control-label {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-weight: 600;
 }
 
 /* ---------- Forms ---------- */
@@ -415,9 +570,15 @@ input[type="number"] {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-3);
+  min-height: 2.25rem;
   width: 100%;
   max-width: 28rem;
   transition: border-color var(--transition-fast);
+}
+
+input::placeholder {
+  color: var(--muted);
+  opacity: 1;
 }
 
 input[type="text"]:hover,
@@ -446,8 +607,7 @@ form label {
   margin-bottom: var(--space-1);
 }
 
-/* A label wrapping a checkbox (settings "Protected" toggle) reads inline,
-   not as a stacked block field. */
+/* A label wrapping a checkbox reads inline, not as a stacked block field. */
 label:has(input[type="checkbox"]) {
   display: flex;
   align-items: center;
@@ -456,19 +616,42 @@ label:has(input[type="checkbox"]) {
   margin-bottom: 0;
 }
 
+/* A labeled input + button pair that reads as one control. The flex basis
+   applies in row-direction forms; column-direction forms (login) reset it,
+   since there the basis would become a forced height. */
+.field {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.login-form .field {
+  flex: none;
+}
+
+.field input {
+  max-width: none;
+}
+
+input.mono {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
 /* ---------- Badges (relay / reachability state) ---------- */
 
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 0.4em;
-  padding: 0.25em 0.7em;
+  gap: 0.45em;
+  padding: 0.3em 0.75em;
   border-radius: var(--radius-pill);
   font-size: var(--text-sm);
-  font-weight: 700;
+  font-weight: 650;
   line-height: 1.4;
-  color: #fff;
   white-space: nowrap;
+  background: color-mix(in oklab, currentColor 11%, transparent);
 }
 
 /* Shape glyphs so state never depends on color alone: filled / hollow /
@@ -479,15 +662,17 @@ label:has(input[type="checkbox"]) {
 }
 
 .badge.on {
-  background: var(--on);
+  color: var(--on);
 }
 
 .badge.on::before {
   content: "\25CF";
+  /* The design's one deliberate use of light: a live "on" glows softly. */
+  text-shadow: 0 0 6px color-mix(in oklab, var(--on-solid) 75%, transparent);
 }
 
 .badge.off {
-  background: var(--off);
+  color: var(--off);
 }
 
 .badge.off::before {
@@ -495,7 +680,7 @@ label:has(input[type="checkbox"]) {
 }
 
 .badge.unknown {
-  background: var(--unknown);
+  color: var(--unknown);
 }
 
 .badge.unknown::before {
@@ -503,20 +688,38 @@ label:has(input[type="checkbox"]) {
 }
 
 .badge.offline {
-  background: var(--offline);
+  color: var(--offline);
 }
 
 .badge.offline::before {
   content: "\2298";
 }
 
-/* A soft glow on a live "on" badge - the one place motion/light is spent as
-   the design's signature, otherwise the panel stays calm. */
-.badge.on {
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--on) 18%, transparent);
+/* ---------- Chips (vendor tag, credential marker) ---------- */
+
+.vendor-tag {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  padding: 0.1em 0.6em;
+  white-space: nowrap;
 }
 
-/* ---------- Dashboard: bulk controls + grid ---------- */
+.badge.credential-set {
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: var(--text-xs);
+}
+
+.badge.credential-set::before {
+  content: none;
+}
+
+/* ---------- Dashboard: header, summary, grid ---------- */
 
 .grid-header {
   display: flex;
@@ -536,26 +739,94 @@ label:has(input[type="checkbox"]) {
   gap: var(--space-2);
 }
 
+.bulk-actions form {
+  margin: 0;
+}
+
+/* The live fleet strip: aggregate instruments above the grid. Values are
+   honest sums/counts over the CURRENT poll only; when nothing reports power
+   the load shows n/a, never 0. */
+.fleet-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4) var(--space-6);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-4);
+}
+
+.fleet-summary .stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 7rem;
+}
+
+.fleet-summary .stat-label {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.fleet-summary .stat-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-lg);
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.fleet-summary .stat-value .unit,
+.fleet-summary .stat-value .of {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.fleet-summary .stat-detail {
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+  gap: var(--space-3);
 }
 
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   padding: var(--space-4);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
   box-shadow: var(--shadow-sm);
-  transition: box-shadow var(--transition-base);
+  transition:
+    box-shadow var(--transition-base),
+    border-color var(--transition-base);
 }
 
 .card:hover {
   box-shadow: var(--shadow-md);
+  border-color: var(--border-strong);
+}
+
+/* An unreachable device recedes: readouts mute, the card flattens. The badge
+   and name keep full contrast - the offline state itself must stay legible. */
+.card.offline {
+  background: color-mix(in oklab, var(--surface) 55%, var(--bg));
+  box-shadow: none;
+}
+
+.card.offline .card-readouts,
+.card.offline .card-meta {
+  opacity: 0.75;
 }
 
 .card-header {
@@ -566,9 +837,11 @@ label:has(input[type="checkbox"]) {
 }
 
 .card-name {
-  font-weight: 700;
+  font-weight: 650;
   font-size: var(--text-md);
   color: var(--text);
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
 }
 
 .card-name:hover {
@@ -579,14 +852,22 @@ label:has(input[type="checkbox"]) {
 .card-readouts {
   display: flex;
   align-items: baseline;
-  gap: var(--space-4);
+  gap: var(--space-3);
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 .card-power {
   font-size: var(--text-lg);
   font-weight: 700;
   color: var(--text);
+}
+
+.card-power .unit {
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--muted);
+  margin-left: 0.15em;
 }
 
 .card-today {
@@ -596,21 +877,45 @@ label:has(input[type="checkbox"]) {
 
 .card-meta {
   display: flex;
-  gap: var(--space-3);
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
   color: var(--muted);
   font-size: var(--text-xs);
+}
+
+.card-meta .host {
   font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 14rem;
 }
 
-.card-meta .is-offline {
-  color: var(--offline);
-  font-weight: 700;
+.card-footer {
+  margin-top: auto;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
 }
 
-/* Wi-Fi signal: a mini strength-bars glyph plus the quality percentage. The
-   bars rise left to right; filled bars use the accent, the rest stay faint. */
+.card-footer form {
+  margin: 0;
+}
+
+/* Fallback control when the relay is unknown or the device unreachable. */
+.card-footer button.btn-toggle {
+  min-width: 7rem;
+}
+
+@media (min-width: 640px) {
+  .grid {
+    gap: var(--space-4);
+  }
+}
+
+/* Wi-Fi signal: a mini strength-bars glyph plus the vendor's real unit. The
+   bars rise left to right; filled bars take the text color, the rest stay
+   faint. */
 .signal {
   display: inline-flex;
   align-items: center;
@@ -621,13 +926,14 @@ label:has(input[type="checkbox"]) {
   display: inline-flex;
   align-items: flex-end;
   gap: 2px;
-  height: 0.9em;
+  height: 0.85em;
 }
 
 .signal-bars .bar {
   width: 3px;
   background: var(--border-strong);
   border-radius: 1px;
+  opacity: 0.55;
 }
 
 .signal-bars .bar:nth-child(1) {
@@ -644,48 +950,14 @@ label:has(input[type="checkbox"]) {
 }
 
 .signal-bars .bar.on {
-  background: var(--accent);
+  background: currentColor;
+  opacity: 1;
 }
 
-.signal-pct {
-  font-variant-numeric: tabular-nums;
-}
-
-/* Shelly devices report raw dBm rather than a quality percentage; same
-   tabular-numeric treatment as .signal-pct so digits don't jitter. */
+.signal-pct,
 .signal-dbm {
-  font-variant-numeric: tabular-nums;
-}
-
-/* A small, muted vendor label ("Tasmota"/"Shelly") shown on the dashboard
-   card and the device detail header. Reuses .card-meta's muted/uppercase
-   tokens so it reads as metadata, never as a primary control. */
-.vendor-tag {
-  color: var(--muted);
-  font-size: var(--text-xs);
   font-family: var(--font-mono);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.card-footer {
-  margin-top: auto;
-  padding-top: var(--space-2);
-  border-top: 1px solid var(--border);
-}
-
-.card-footer .toggle {
-  margin: 0;
-}
-
-.card-footer button {
-  width: 100%;
-}
-
-@media (min-width: 640px) {
-  .grid {
-    gap: var(--space-5);
-  }
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- Toasts ---------- */
@@ -695,7 +967,7 @@ label:has(input[type="checkbox"]) {
   left: var(--space-4);
   right: var(--space-4);
   bottom: var(--space-4);
-  z-index: 30;
+  z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -724,7 +996,21 @@ label:has(input[type="checkbox"]) {
   padding: var(--space-3) var(--space-4);
   box-shadow: var(--shadow-lg);
   font-size: var(--text-sm);
-  animation: toast-in var(--transition-base);
+  /* Slide in, hold, then quietly leave. The undo window is the hold. */
+  animation:
+    toast-in var(--transition-base) backwards,
+    toast-out 300ms var(--ease-out) 6s forwards;
+}
+
+.toast.error {
+  color: var(--offline);
+  border-color: color-mix(in oklab, var(--offline) 35%, transparent);
+  background: color-mix(in oklab, var(--offline) 7%, var(--surface));
+  /* Errors deserve a longer read; they still leave on their own. */
+  animation:
+    toast-in var(--transition-base) backwards,
+    toast-out 300ms var(--ease-out) 12s forwards;
+  overflow-wrap: anywhere;
 }
 
 @keyframes toast-in {
@@ -739,12 +1025,20 @@ label:has(input[type="checkbox"]) {
   }
 }
 
+@keyframes toast-out {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
 .toast .undo {
   background: transparent;
   border: none;
   color: var(--accent);
   font-weight: 700;
   padding: var(--space-1) var(--space-2);
+  min-height: 0;
   flex-shrink: 0;
 }
 
@@ -758,12 +1052,12 @@ label:has(input[type="checkbox"]) {
 .modal-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(10, 12, 18, 0.55);
+  background: light-dark(oklch(25% 0.02 260 / 0.45), oklch(5% 0.01 260 / 0.6));
   display: flex;
   align-items: center;
   justify-content: center;
   padding: var(--space-4);
-  z-index: 40;
+  z-index: var(--z-modal);
   animation: fade-in var(--transition-base);
 }
 
@@ -780,15 +1074,34 @@ label:has(input[type="checkbox"]) {
 .modal {
   background: var(--surface);
   color: var(--text);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: var(--space-5);
   width: 100%;
   max-width: 26rem;
   box-shadow: var(--shadow-lg);
+  animation: modal-in var(--transition-base) backwards;
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
 .modal h2 {
   margin-top: 0;
+  overflow-wrap: anywhere;
+}
+
+.modal form {
+  margin: 0;
 }
 
 .modal-actions {
@@ -796,24 +1109,63 @@ label:has(input[type="checkbox"]) {
   justify-content: flex-end;
   gap: var(--space-2);
   margin-top: var(--space-4);
+  width: 100%;
+}
+
+/* ---------- Panels (device detail, settings) ---------- */
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  break-inside: avoid;
+}
+
+.panel h2 {
+  margin-bottom: var(--space-3);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: minmax(6rem, max-content) 1fr;
+  column-gap: var(--space-4);
+  row-gap: var(--space-2);
+  margin: 0;
+  align-items: baseline;
+}
+
+dt {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 /* ---------- Device detail ---------- */
 
-.device-detail section {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-4);
-  margin-bottom: var(--space-4);
-}
-
 .device-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-3);
   margin-bottom: var(--space-5);
+}
+
+.device-header .device-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
 }
 
 .device-header h1 {
@@ -826,10 +1178,28 @@ label:has(input[type="checkbox"]) {
   font-size: var(--text-sm);
 }
 
+.device-header .device-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.device-header .device-actions form {
+  margin: 0;
+}
+
+/* Status panels flow into two balanced columns on wide screens; `columns`
+   (not grid) so short panels never leave row-aligned gaps. */
+@media (min-width: 760px) {
+  .device-panels {
+    columns: 2;
+    column-gap: var(--space-4);
+  }
+}
+
 .relays ul {
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
 }
 
 .relays li {
@@ -842,39 +1212,34 @@ label:has(input[type="checkbox"]) {
 
 .relays li:last-child {
   border-bottom: none;
+  padding-bottom: 0;
 }
 
-dl {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  column-gap: var(--space-4);
-  row-gap: var(--space-2);
-  margin: 0;
-}
-
-dt {
-  color: var(--muted);
+.relay-index {
   font-size: var(--text-sm);
-}
-
-dd {
-  margin: 0;
-  font-family: var(--font-mono);
   font-weight: 600;
 }
 
-@media (min-width: 640px) {
-  .device-detail {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: var(--space-4);
-    align-items: start;
-  }
+/* The energy panel leads with the live draw as a meter readout. */
+.energy-hero {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: var(--space-4);
+}
 
-  .device-header,
-  #admin-panel {
-    grid-column: 1 / -1;
-  }
+.energy-hero .value {
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.energy-hero .unit {
+  color: var(--muted);
+  font-size: var(--text-md);
+  font-weight: 500;
 }
 
 /* ---------- Admin panel ---------- */
@@ -885,23 +1250,27 @@ dd {
   gap: var(--space-5);
 }
 
+.admin-panel > h2 {
+  margin-bottom: calc(-1 * var(--space-2));
+}
+
 .admin-section h3 {
-  margin-bottom: var(--space-2);
-  color: var(--muted);
-  font-size: var(--text-sm);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  margin-bottom: var(--space-1);
+}
+
+.admin-section .hint {
+  margin-bottom: var(--space-3);
 }
 
 .admin-section form {
   margin-bottom: var(--space-2);
+  align-items: end;
+  max-width: 44rem;
 }
 
-.admin-backup {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  align-items: center;
+.admin-backup .hint {
+  margin-top: var(--space-2);
+  max-width: 65ch;
 }
 
 #admin-result:empty {
@@ -913,6 +1282,7 @@ dd {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: var(--space-3);
+  margin: 0;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
   overflow-x: auto;
@@ -922,21 +1292,35 @@ dd {
 
 /* ---------- Discover ---------- */
 
+.discover-form {
+  align-items: end;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  max-width: 42rem;
+}
+
 .discover-results-list li {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: var(--space-2);
-  padding: var(--space-3);
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-4);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   margin-bottom: var(--space-2);
 }
 
+.discover-results-list form {
+  margin: 0;
+  margin-left: auto;
+}
+
 .discover-name {
-  font-weight: 600;
+  font-weight: 650;
 }
 
 .discover-host {
@@ -947,26 +1331,36 @@ dd {
 
 /* ---------- Settings ---------- */
 
+.settings-page section {
+  margin-bottom: var(--space-5);
+}
+
+.settings-page .settings-intro {
+  margin-top: calc(-1 * var(--space-4));
+}
+
 .settings-device-list li {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   padding: var(--space-4);
-  margin-bottom: var(--space-4);
+  margin-bottom: var(--space-3);
 }
 
 .device-summary {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-bottom: var(--space-3);
+  gap: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-4);
   padding-bottom: var(--space-3);
   border-bottom: 1px solid var(--border);
 }
 
 .device-summary .device-name {
-  font-weight: 700;
+  font-weight: 650;
+  font-size: var(--text-md);
+  letter-spacing: -0.01em;
 }
 
 .device-summary .device-host {
@@ -975,14 +1369,34 @@ dd {
   font-size: var(--text-sm);
 }
 
-.badge.credential-set {
-  background: var(--surface-muted);
-  color: var(--muted);
-  font-weight: 600;
+.device-summary form {
+  margin: 0 0 0 auto;
 }
 
-.badge.credential-set::before {
-  content: none;
+/* The per-device forms sit side by side as aligned columns on wide screens. */
+.settings-device .device-forms {
+  display: grid;
+  /* min() keeps the column floor from forcing horizontal scroll on phones. */
+  grid-template-columns: repeat(auto-fit, minmax(min(21rem, 100%), 1fr));
+  gap: var(--space-4);
+  align-items: end;
+}
+
+.settings-device .device-forms form {
+  margin: 0;
+  align-items: end;
+}
+
+.settings-device .device-forms .field {
+  flex-basis: 11rem;
+}
+
+.settings-protected {
+  grid-column: 1 / -1;
+}
+
+.settings-poll-interval form {
+  max-width: 30rem;
 }
 
 /* ---------- Login ---------- */
@@ -997,21 +1411,53 @@ dd {
   box-shadow: var(--shadow-md);
 }
 
+.login-page .login-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.login-page .login-brand svg {
+  color: var(--accent);
+}
+
 .login-page h1 {
+  margin: 0;
   text-align: center;
 }
 
 .login-form {
   flex-direction: column;
   align-items: stretch;
+  margin: 0;
+}
+
+.login-form input {
+  max-width: none;
 }
 
 .login-error {
-  background: color-mix(in srgb, var(--offline) 12%, var(--surface));
+  background: color-mix(in oklab, var(--offline) 9%, var(--surface));
   color: var(--offline);
-  border: 1px solid var(--offline);
+  border: 1px solid color-mix(in oklab, var(--offline) 40%, transparent);
   border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-sm);
   font-weight: 600;
+}
+
+/* ---------- Utilities ---------- */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
