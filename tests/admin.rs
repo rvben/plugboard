@@ -800,5 +800,5 @@ fn sanitize_filename_keeps_only_the_safe_charset_and_falls_back_when_empty() {
         "got {safe:?}"
     );
     assert!(!safe.is_empty());
-    assert_eq!(sanitize_filename(""), "tasmota-backup");
+    assert_eq!(sanitize_filename(""), "plugboard-backup");
 }

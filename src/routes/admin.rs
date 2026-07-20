@@ -98,7 +98,7 @@ fn validate_setting(vendor: Vendor, setting: &str) -> Result<(), AppError> {
 /// `[A-Za-z0-9._-]` survives (every other BYTE becomes `_`, so a multi-byte
 /// UTF-8 character or a raw control byte like `\r`/`\n` can never leak into
 /// the header), leading/trailing `.`/`_` are trimmed, the result is capped to
-/// 64 bytes, and an empty result falls back to `tasmota-backup` - a hostile
+/// 64 bytes, and an empty result falls back to `plugboard-backup` - a hostile
 /// or empty device name can never produce an empty or header-breaking
 /// filename.
 pub fn sanitize_filename(name: &str) -> String {
@@ -116,7 +116,7 @@ pub fn sanitize_filename(name: &str) -> String {
     let trimmed = cleaned.trim_matches(|c| c == '.' || c == '_');
     let capped: String = trimmed.chars().take(64).collect();
     if capped.is_empty() {
-        "tasmota-backup".to_string()
+        "plugboard-backup".to_string()
     } else {
         capped
     }
@@ -304,7 +304,7 @@ pub async fn firmware_update(
 /// value: a device name with header-hostile bytes (quotes, CR/LF, non-ASCII)
 /// can only ever produce an allowlisted filename or, on the (now
 /// unreachable) `HeaderValue` construction error, the static
-/// `tasmota-backup.dmp` fallback.
+/// `plugboard-backup.dmp` fallback.
 pub async fn backup(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -316,7 +316,7 @@ pub async fn backup(
     let safe = sanitize_filename(&name);
     let disposition = HeaderValue::from_str(&format!("attachment; filename=\"{safe}.dmp\""))
         .unwrap_or_else(|_| {
-            HeaderValue::from_static("attachment; filename=\"tasmota-backup.dmp\"")
+            HeaderValue::from_static("attachment; filename=\"plugboard-backup.dmp\"")
         });
     let mut response = (StatusCode::OK, bytes).into_response();
     response.headers_mut().insert(
@@ -346,9 +346,9 @@ mod tests {
 
     #[test]
     fn sanitize_filename_falls_back_when_empty() {
-        assert_eq!(sanitize_filename(""), "tasmota-backup");
+        assert_eq!(sanitize_filename(""), "plugboard-backup");
         // Entirely hostile bytes that trim away to nothing.
-        assert_eq!(sanitize_filename("...___..."), "tasmota-backup");
+        assert_eq!(sanitize_filename("...___..."), "plugboard-backup");
     }
 
     #[test]

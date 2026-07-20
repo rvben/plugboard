@@ -46,7 +46,7 @@ wall-mounted tablet instead of a terminal.
 - **Bulk all-on / all-off**, with a confirmation step and a per-device
   success/failure summary.
 - **Per-device detail**: relays, energy (power, voltage, current, today's/total
-  kWh), firmware version, network info, and MQTT status.
+  kWh), firmware version, and network info.
 - **Per-device admin panel**: console commands, config get/set, firmware
   check/update, and a config backup download, reusing the same shared,
   vendor-aware destructive-command guardrails as the CLIs
@@ -210,9 +210,9 @@ authenticating proxy in front of the app.
   renders as `n/a`, never a coerced `0`. A missing reading, a device that
   doesn't report that field, and a genuine zero are different facts and are
   never collapsed into each other.
-- `mqtt.connected` is hard-coded to `n/a`: the app talks to devices over
-  HTTP only, so it has no way to know a device's live MQTT connection state,
-  and the status page never guesses.
+- There is no MQTT section: `plugboard`'s vendor-neutral device model
+  (`switchkit::DeviceSnapshot`) carries no MQTT field for either Tasmota or
+  Shelly, so the app never shows or guesses at an MQTT connection state.
 - An offline device is shown as offline, its last-known values are not
   reused to fake a live reading.
 - Destructive operations (firmware update, config set, console commands
