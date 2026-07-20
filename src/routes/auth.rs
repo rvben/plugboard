@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use axum::Form;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderValue, StatusCode};
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Response};
 use maud::Markup;
 use serde::Deserialize;
 use tower_sessions::Session;
@@ -27,7 +27,7 @@ const TOO_MANY_ATTEMPTS: &str = "too many attempts, try again later";
 /// login form and, via the `Csrf` extractor, creates the anonymous
 /// pre-auth session that holds the CSRF token `POST /login` will check.
 pub async fn login_get(csrf: Csrf) -> Markup {
-    layout::page("Login", &csrf.0, login_page(None))
+    layout::page("Login", &csrf.0, layout::Chrome::login(), login_page(None))
 }
 
 #[derive(Deserialize)]
@@ -56,7 +56,12 @@ pub async fn login_post(
     if !state.inner.rate_limiter.attempt(addr.ip()) {
         return (
             StatusCode::TOO_MANY_REQUESTS,
-            layout::page("Login", &csrf.0, login_page(Some(TOO_MANY_ATTEMPTS))),
+            layout::page(
+                "Login",
+                &csrf.0,
+                layout::Chrome::login(),
+                login_page(Some(TOO_MANY_ATTEMPTS)),
+            ),
         )
             .into_response();
     }
@@ -88,7 +93,12 @@ pub async fn login_post(
     if !authenticated {
         return (
             StatusCode::UNAUTHORIZED,
-            layout::page("Login", &csrf.0, login_page(Some(INVALID_CREDENTIALS))),
+            layout::page(
+                "Login",
+                &csrf.0,
+                layout::Chrome::login(),
+                login_page(Some(INVALID_CREDENTIALS)),
+            ),
         )
             .into_response();
     }
@@ -114,10 +124,18 @@ pub async fn login_post(
 /// `POST /logout` (app tier: session + CSRF + `require_auth`). Flushes the
 /// session entirely (clears data, deletes it from the store, nulls the
 /// session id) rather than just removing the `AUTHENTICATED_KEY` marker, so
-/// the old cookie cannot authenticate again even if replayed.
-pub async fn logout(session: Session) -> Redirect {
+/// the old cookie cannot authenticate again even if replayed. Responds with
+/// the same `hx-redirect` full-page navigation contract as login: the topbar
+/// Sign out button posts via htmx, and an XHR-followed 303 would hand htmx
+/// the login page's HTML to swap into the button's form instead of
+/// navigating.
+pub async fn logout(session: Session) -> Response {
     if let Err(err) = session.flush().await {
         tracing::warn!(%err, "failed to flush session on logout");
     }
-    Redirect::to("/login")
+    let mut response = StatusCode::OK.into_response();
+    response
+        .headers_mut()
+        .insert("hx-redirect", HeaderValue::from_static("/login"));
+    response
 }

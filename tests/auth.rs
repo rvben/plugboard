@@ -330,7 +330,17 @@ async fn logout_flushes_session_old_cookie_no_longer_authenticates() {
         )
         .await
         .unwrap();
-    assert_eq!(logout_response.status(), StatusCode::SEE_OTHER);
+    // Logout answers the htmx Sign out POST with the same full-page
+    // `hx-redirect` navigation contract as login (an XHR-followed 303 would
+    // hand htmx the login page's HTML to swap inline instead of navigating).
+    assert_eq!(logout_response.status(), StatusCode::OK);
+    assert_eq!(
+        logout_response
+            .headers()
+            .get("hx-redirect")
+            .expect("logout must carry an hx-redirect header"),
+        "/login"
+    );
 
     let after = get_root(&app, Some(&authed_cookie)).await;
     assert_eq!(
