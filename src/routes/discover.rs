@@ -1,7 +1,16 @@
-//! Device discovery routes (Task 9): `GET /discover` (the CIDR scan form),
-//! `POST /discover/scan` (runs `switchkit::discover` against the fleet's
-//! wired vendor clients, fully async), and `POST /discover/add` (persists a
-//! found device into the config and fleet).
+//! Device discovery routes (Task 9, mixed-vendor per Plan C Task 3):
+//! `GET /discover` (the CIDR scan form), `POST /discover/scan` (runs
+//! `switchkit::discover` against EVERY vendor client this app has wired up,
+//! fully async), and `POST /discover/add` (persists a found device into the
+//! config and fleet).
+//!
+//! SECURITY: `add` never trusts a caller-supplied vendor. Discovery is the
+//! only source of truth for which vendor a host is: `add` always re-probes
+//! the single host over every wired client (see `probe_host`) and persists
+//! ONLY the vendor that probe confirms. A host that no client confirms is
+//! rejected, never guessed or defaulted.
+
+use std::sync::Arc;
 
 use axum::Form;
 use axum::extract::State;
@@ -16,6 +25,41 @@ use crate::fleet::{DeviceView, device_id};
 use crate::redact::scrub_credentials;
 use crate::state::AppState;
 use crate::views::{discover, layout};
+
+/// Every vendor client this app currently has wired up (see
+/// `AppState::client`), collected as owned `Arc`s so the borrowed
+/// `&dyn SmartDevice` slice handed to `switchkit::discover` can outlive the
+/// async call. `Vendor` is `#[non_exhaustive]`; listing known variants
+/// explicitly here (rather than iterating some enum-wide set) means a future
+/// vendor this app has not wired a client for is simply absent from probing,
+/// never guessed.
+fn wired_clients(state: &AppState) -> Vec<Arc<dyn SmartDevice + Send + Sync>> {
+    [Vendor::Tasmota, Vendor::Shelly]
+        .into_iter()
+        .filter_map(|v| state.client(v))
+        .collect()
+}
+
+/// Re-confirms a single host's vendor server-side by probing it against
+/// EVERY wired client, exactly like `scan` does for a whole range. Returns
+/// the vendor `switchkit::discover` actually confirmed, or `None` if no
+/// client confirmed it - the caller must never fall back to a guessed or
+/// caller-supplied vendor in that case.
+///
+/// No credentials are passed to the probe: at this point the host is not yet
+/// in the config (that's what `add` is about to do), so there is no stored
+/// credential for it to look up in the first place - unlike `target_for`,
+/// which only serves already-configured hosts.
+async fn probe_host(state: &AppState, host: &str) -> Option<Vendor> {
+    let clients = wired_clients(state);
+    let refs: Vec<&dyn SmartDevice> = clients
+        .iter()
+        .map(|c| c.as_ref() as &dyn SmartDevice)
+        .collect();
+    let hosts = vec![host.to_string()];
+    let found = switchkit::discover(&refs, &hosts, 1, None).await;
+    found.into_iter().next().map(|d| d.vendor)
+}
 
 /// A documentation-range placeholder shown when `detect_local_cidr()` cannot
 /// determine the host's own subnet (e.g. a sandboxed or offline environment).
@@ -36,13 +80,15 @@ pub struct ScanForm {
 
 /// `POST /discover/scan` - expand the CIDR (rejecting a malformed or
 /// too-large range with 400 before any network I/O, via `hosts_in_cidr`'s own
-/// scan-size guard), then probe every host against every vendor client wired
-/// up in `AppState` (Tasmota only for now - see `AppState::client`; a future
-/// vendor with a wired client joins this list for free). `switchkit::discover`
-/// is itself async (a bounded, concurrent fan-out), so this runs directly on
-/// the async runtime - no `spawn_blocking`, unlike the old `tasmota_core`
-/// blocking scan this replaces. An empty result (no device confirmed by any
-/// client in the range) renders `discover::results`' own hint, never an error.
+/// scan-size guard), then probe every host against EVERY vendor client wired
+/// up in `AppState` (`wired_clients` - a future vendor with a wired client
+/// joins this list for free). `switchkit::discover` is itself async (a
+/// bounded, concurrent fan-out), so this runs directly on the async runtime -
+/// no `spawn_blocking`, unlike the old `tasmota_core` blocking scan this
+/// replaces. A host that no client confirms is simply absent from the
+/// result - never guessed at, never defaulted to a vendor. An empty result
+/// (no device confirmed by any client in the range) renders
+/// `discover::results`' own hint, never an error.
 pub async fn scan(
     State(state): State<AppState>,
     Form(form): Form<ScanForm>,
@@ -52,23 +98,26 @@ pub async fn scan(
     // and cannot realistically carry a credential.
     let hosts = switchkit::hosts_in_cidr(&form.range)
         .map_err(|e| AppError::BadRequest(scrub_credentials(&e.to_string())))?;
-    let Some(tasmota) = state.client(Vendor::Tasmota) else {
-        return Err(AppError::Internal(
-            "no client configured for Tasmota".into(),
-        ));
-    };
-    let clients: [&dyn SmartDevice; 1] = [tasmota.as_ref()];
-    let found = switchkit::discover(&clients, &hosts, 64, None).await;
-    let pairs: Vec<(String, String)> = found
+    let clients = wired_clients(&state);
+    if clients.is_empty() {
+        return Err(AppError::Internal("no vendor clients configured".into()));
+    }
+    let refs: Vec<&dyn SmartDevice> = clients
+        .iter()
+        .map(|c| c.as_ref() as &dyn SmartDevice)
+        .collect();
+    let found = switchkit::discover(&refs, &hosts, 64, None).await;
+    let triples: Vec<(String, String, Vendor)> = found
         .iter()
         .map(|d| {
             (
                 d.snapshot.display_name().to_string(),
                 d.snapshot.host.clone(),
+                d.vendor,
             )
         })
         .collect();
-    Ok(discover::results(&pairs))
+    Ok(discover::results(&triples))
 }
 
 #[derive(Deserialize)]
@@ -78,6 +127,16 @@ pub struct AddForm {
 }
 
 /// `POST /discover/add` - persist a found device into the config and fleet.
+///
+/// SECURITY: this form is deliberately NOT given a `vendor` field. Even if a
+/// caller appends one to the POST body (e.g. `vendor=shelly` copied from a
+/// scan result, honest or forged), `AddForm` has nowhere to deserialize it
+/// into, so it can never be read, let alone trusted. The persisted vendor
+/// comes ONLY from `probe_host` re-confirming `form.host` server-side against
+/// every wired vendor client; a host that no client confirms is rejected with
+/// 400 and never added - a vendor is never guessed or taken on a caller's
+/// word.
+///
 /// The duplicate check and the config push happen under the SAME write-lock
 /// hold, so two concurrent adds of the same host can never both succeed; a
 /// duplicate host is rejected with 400 and never appended twice.
@@ -93,15 +152,19 @@ pub async fn add(
     State(state): State<AppState>,
     Form(form): Form<AddForm>,
 ) -> Result<Markup, AppError> {
+    let Some(vendor) = probe_host(&state, &form.host).await else {
+        return Err(AppError::BadRequest(format!(
+            "{} did not confirm as a known vendor; refusing to add an unverified device",
+            form.host
+        )));
+    };
     let device = DeviceConfig {
         name: form.name,
         host: form.host,
         password: None,
         protected: false,
-        // Discovery currently only probes Tasmota clients (see `scan` above),
-        // so every device it finds is a real Tasmota device. Task 3 wires
-        // per-vendor discovery and threads the matched vendor through here.
-        vendor: Vendor::Tasmota,
+        // The ONLY source for this field: the server-side re-probe above.
+        vendor,
     };
     {
         let mut cfg = state.inner.config.write().await;

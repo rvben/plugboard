@@ -15,7 +15,7 @@ use httpmock::prelude::*;
 use serde_json::json;
 use tower::ServiceExt;
 
-use switchkit::Vendor;
+use switchkit::{Capabilities, DeviceSnapshot, Vendor};
 use tasmota_web::config::{Config, DeviceConfig};
 use tasmota_web::fleet::device_id;
 use tasmota_web::routes;
@@ -23,15 +23,51 @@ use tasmota_web::routes::admin::sanitize_filename;
 use tasmota_web::state::AppState;
 
 fn config_with(host: &str, name: &str) -> Config {
+    config_with_vendor(host, name, Vendor::Tasmota)
+}
+
+fn config_with_vendor(host: &str, name: &str, vendor: Vendor) -> Config {
     Config {
         devices: vec![DeviceConfig {
             name: name.into(),
             host: host.into(),
             password: None,
             protected: false,
-            vendor: Vendor::Tasmota,
+            vendor,
         }],
         ..Config::default()
+    }
+}
+
+/// A minimal Gen2 Shelly device info body: `probe_target`/`open` only need
+/// enough to recognize a Gen2 device and route console calls to `rpc_raw`.
+fn mock_shelly_gen2_info(server: &MockServer) {
+    server.mock(|when, then| {
+        when.method(GET).path("/shelly");
+        then.status(200).json_body(json!({
+            "id": "shellyplus1pm-aabbccddeeff",
+            "mac": "AABBCCDDEEFF",
+            "model": "SNSW-001P16EU",
+            "gen": 2,
+            "ver": "1.2.3",
+            "app": "Plus1PM",
+            "auth_en": false
+        }));
+    });
+}
+
+/// A capabilities-populated `DeviceSnapshot`, standing in for whatever a real
+/// poll/toggle would have last written into `DeviceView.status`, so the
+/// admin-panel rendering tests below can assert on `admin_panel`'s output
+/// without needing a live device round-trip for a pure-rendering check.
+fn snapshot_with_console(host: &str) -> DeviceSnapshot {
+    DeviceSnapshot {
+        host: host.into(),
+        capabilities: Capabilities {
+            console: true,
+            ..Default::default()
+        },
+        ..Default::default()
     }
 }
 
@@ -236,11 +272,12 @@ async fn console_destructive_command_requires_confirmation_before_hitting_device
 #[tokio::test]
 async fn console_requires_confirmation_command_requires_confirmation_before_hitting_device() {
     // Self-documents the hazard class this test exercises: fails loudly if
-    // upstream `tasmota_core::guardrail` ever reclassifies this command.
+    // the shared `switchkit::guardrail` (the ACTUAL table `routes::admin`
+    // classifies through) ever reclassifies this command.
     assert!(
         matches!(
-            tasmota_core::guardrail::classify("SetOption65 1"),
-            tasmota_core::guardrail::Hazard::RequiresConfirmation
+            switchkit::guardrail::classify(Vendor::Tasmota, "SetOption65 1"),
+            switchkit::guardrail::Hazard::RequiresConfirmation
         ),
         "`SetOption65 1` must classify as Hazard::RequiresConfirmation for this test to guard \
          the `| Hazard::RequiresConfirmation` arm of the console gate"
@@ -295,6 +332,149 @@ async fn console_requires_confirmation_command_requires_confirmation_before_hitt
     let confirmed_body = body_string(confirmed).await;
     assert!(confirmed_body.contains(r#"id="admin-result""#));
     assert!(confirmed_body.contains("SetOption65"));
+}
+
+/// A destructive Shelly RPC method (`Shelly.FactoryReset`, classified
+/// `Hazard::Destructive` by the SAME shared `switchkit::guardrail` a Tasmota
+/// command goes through) is gated exactly like the Tasmota case above: proven
+/// non-vacuous with a paired negative control (unconfirmed - modal, the
+/// device's `/shelly` info endpoint AND its `/rpc/Shelly.FactoryReset`
+/// endpoint both see 0 hits) and positive control (confirmed - both are hit).
+/// This is the proof that the vendor-aware guardrail actually covers Shelly,
+/// not just Tasmota.
+#[tokio::test]
+async fn shelly_console_destructive_rpc_requires_confirmation_before_hitting_device() {
+    let server = MockServer::start();
+    mock_shelly_gen2_info(&server);
+    let factory_reset = server.mock(|when, then| {
+        when.method(GET).path("/rpc/Shelly.FactoryReset");
+        then.status(200).json_body(json!({}));
+    });
+    let host = server.address().to_string();
+    let id = device_id(&host);
+
+    let state = AppState::new(
+        config_with_vendor(&host, "Shelly Plug", Vendor::Shelly),
+        PathBuf::from("unused.toml"),
+    );
+    let app = routes::router(state, false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    // Negative control: no `confirmed` -> modal naming the hazard, device untouched.
+    let gated = post_form(
+        &app,
+        &cookie,
+        &token,
+        &format!("/device/{id}/console"),
+        "command=Shelly.FactoryReset",
+    )
+    .await;
+    assert_eq!(gated.status(), StatusCode::OK);
+    let gated_body = body_string(gated).await;
+    assert!(
+        gated_body.contains("performs a factory reset"),
+        "the modal should name the RPC's hazard reason, body was: {gated_body}"
+    );
+    assert!(
+        gated_body.contains(r#"id="modal" hx-swap-oob="true""#),
+        "the modal must be an OOB swap into #modal"
+    );
+    assert_eq!(
+        factory_reset.hits(),
+        0,
+        "an unconfirmed destructive Shelly RPC must not reach the device"
+    );
+
+    // Positive control: identical command plus confirmed=true -> the SAME
+    // mock now receives a hit, proving the prior 0 was a real gate.
+    let confirmed = post_form(
+        &app,
+        &cookie,
+        &token,
+        &format!("/device/{id}/console"),
+        "command=Shelly.FactoryReset&confirmed=true",
+    )
+    .await;
+    assert_eq!(confirmed.status(), StatusCode::OK);
+    assert_eq!(
+        factory_reset.hits(),
+        1,
+        "confirmed=true must send the RPC to the device"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// per-vendor admin panel rendering
+// ---------------------------------------------------------------------------
+
+/// A Tasmota device's admin panel offers a console with Tasmota bare-command
+/// placeholder copy, and never the Shelly-specific "RPC console" heading.
+#[tokio::test]
+async fn tasmota_admin_panel_offers_console_with_tasmota_placeholder() {
+    let host = "192.0.2.40".to_string();
+    let state = AppState::new(
+        config_with(&host, "Test Plug"),
+        PathBuf::from("unused.toml"),
+    );
+    {
+        let mut fleet = state.inner.fleet.write().await;
+        let dev = fleet.devices.first_mut().expect("one device configured");
+        dev.reachable = true;
+        dev.status = Some(snapshot_with_console(&host));
+    }
+    let app = routes::router(state, false);
+    let (cookie, _token) = get_cookie_and_token(&app).await;
+    let id = device_id(&host);
+
+    let response = get_route(&app, &cookie, &format!("/device/{id}")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(body.contains("Console"), "got: {body}");
+    assert!(
+        body.contains("e.g. Status 8"),
+        "Tasmota placeholder should show a bare command example, got: {body}"
+    );
+    assert!(
+        !body.contains("RPC console"),
+        "a Tasmota panel must never show the Shelly-specific heading, got: {body}"
+    );
+}
+
+/// A Shelly device's admin panel offers an RPC console (same
+/// `/device/:id/console` route, same `SmartDevice::console` dispatch, just
+/// different copy) with RPC-method placeholder text, and never the
+/// Tasmota-specific bare-command placeholder.
+#[tokio::test]
+async fn shelly_admin_panel_offers_rpc_console_not_tasmota_surface() {
+    let host = "198.51.100.40".to_string();
+    let state = AppState::new(
+        config_with_vendor(&host, "Shelly Plug", Vendor::Shelly),
+        PathBuf::from("unused.toml"),
+    );
+    {
+        let mut fleet = state.inner.fleet.write().await;
+        let dev = fleet.devices.first_mut().expect("one device configured");
+        dev.reachable = true;
+        dev.status = Some(snapshot_with_console(&host));
+    }
+    let app = routes::router(state, false);
+    let (cookie, _token) = get_cookie_and_token(&app).await;
+    let id = device_id(&host);
+
+    let response = get_route(&app, &cookie, &format!("/device/{id}")).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(body.contains("RPC console"), "got: {body}");
+    assert!(
+        body.contains("Shelly.GetStatus"),
+        "Shelly placeholder should show an RPC method example, got: {body}"
+    );
+    assert!(
+        !body.contains("e.g. Status 8"),
+        "a Shelly panel must never show the Tasmota-specific placeholder, got: {body}"
+    );
+    // Both vendors post to the SAME route.
+    assert!(body.contains(&format!(r#"hx-post="/device/{id}/console""#)));
 }
 
 // ---------------------------------------------------------------------------

@@ -1,20 +1,23 @@
 //! Per-device admin panel routes: console, config get/set, firmware
 //! check/update, and config backup download (Task 8).
 //!
-//! Every destructive action reuses `tasmota_core::guardrail::classify`
-//! (identical classification to the CLI) so a device can never be reached
-//! for a destructive or unclassifiable operation without an explicit
-//! `confirmed=true` re-post. `config get`/`config set` additionally run
-//! `validate_setting`, mirroring the CLI's own validator byte-for-byte, so a
-//! setting name that smuggles a Backlog (`;`), a space-separated argument, or
-//! a bare destructive command word is rejected with 400 before any network
-//! I/O. `restore` is intentionally not wired to a route (see the admin panel
-//! view): its upload endpoint is unverified against a live device.
+//! Every destructive action is classified via `switchkit::guardrail::classify(vendor, ..)`,
+//! the SAME shared guardrail both vendor CLIs use, so a device can never be
+//! reached for a destructive or unclassifiable operation without an explicit
+//! `confirmed=true` re-post, regardless of which vendor it is. `config
+//! get`/`config set` additionally run `validate_setting`, which mirrors the
+//! CLI's own validator byte-for-byte and now classifies through the same
+//! vendor-aware guardrail, so a setting name that smuggles a Backlog (`;`), a
+//! space-separated argument, or a bare destructive command/method is rejected
+//! with 400 before any network I/O, for either vendor. `restore` is
+//! intentionally not wired to a route (see the admin panel view): its upload
+//! endpoint is unverified against a live device.
 //!
-//! Guardrail classification stays on `tasmota_core::guardrail` (unchanged):
-//! the fleet is Tasmota-only for now (Task 2 adds a real per-device `vendor`
-//! field to config), and console/config are Tasmota command semantics either
-//! way, so there is no vendor-neutral guardrail to switch to yet.
+//! A device's vendor comes from `device_host_and_name` (the fleet's own
+//! `DeviceConfig.vendor`, never guessed here), and every hazard check passes
+//! that vendor straight into `guardrail::classify`, so a Tasmota console
+//! command and a Shelly RPC method are classified by the same shared rules a
+//! caller cannot bypass by choosing one path over the other.
 
 use axum::Form;
 use axum::extract::{Path, State};
@@ -24,7 +27,7 @@ use maud::{Markup, html};
 use serde::Deserialize;
 use serde_json::Value;
 use switchkit::Vendor;
-use tasmota_core::guardrail::{self, Hazard};
+use switchkit::guardrail::{self, Hazard};
 
 use crate::error::AppError;
 use crate::ops;
@@ -69,18 +72,21 @@ fn result_block(value: &Value) -> Markup {
 
 /// Rejects a setting that is not a single bare command word: mirrors the
 /// CLI's `validate_setting` (see `tasmota-cli/cli/src/commands.rs`) exactly,
-/// so `config get`/`config set` refuse the same inputs the CLI refuses. An
-/// empty setting, one containing whitespace or `;` (a smuggled Backlog or
-/// argument), or one that itself classifies as `Hazard::Destructive` (a bare
-/// `Reset`/`Upgrade`/`Module`/...) is rejected before any network I/O.
-fn validate_setting(setting: &str) -> Result<(), AppError> {
+/// so `config get`/`config set` refuse the same inputs the CLI refuses, now
+/// classified through the same shared, vendor-aware guardrail every other
+/// hazard check in this module uses. An empty setting, one containing
+/// whitespace or `;` (a smuggled Backlog or argument), or one that itself
+/// classifies as `Hazard::Destructive` for `vendor` (a bare
+/// `Reset`/`Upgrade`/`Module`/... for Tasmota, or `FactoryReset`/`Reboot`/
+/// `SetConfig`/`Shelly.Update` for Shelly) is rejected before any network I/O.
+fn validate_setting(vendor: Vendor, setting: &str) -> Result<(), AppError> {
     if setting.is_empty() || setting.chars().any(|c| c.is_whitespace() || c == ';') {
         return Err(AppError::BadRequest(format!(
             "`{setting}` is not a single setting name; use console (guarded) for commands \
              with arguments or Backlog"
         )));
     }
-    if let Hazard::Destructive(reason) = guardrail::classify(setting) {
+    if let Hazard::Destructive(reason) = guardrail::classify(vendor, setting) {
         return Err(AppError::BadRequest(format!(
             "refusing config on a destructive command ({reason}); use console, which guards it"
         )));
@@ -136,7 +142,7 @@ pub async fn console(
 ) -> Result<Response, AppError> {
     let (host, _name, vendor) = device_host_and_name(&state, &id).await?;
     let confirmed = form.confirmed.as_deref() == Some("true");
-    let hazard = guardrail::classify(&form.command);
+    let hazard = guardrail::classify(vendor, &form.command);
     let needs_confirm = matches!(
         hazard,
         Hazard::Destructive(_) | Hazard::RequiresConfirmation
@@ -172,15 +178,16 @@ pub struct ConfigGetForm {
 }
 
 /// `POST /device/:id/config/get` - read a single setting by issuing its bare
-/// command word. Read-only, but still runs `validate_setting` so a smuggled
-/// Backlog/argument/destructive word is rejected with 400 rather than sent.
+/// command word. Read-only, but still runs `validate_setting` (vendor-aware,
+/// via the device's own configured vendor) so a smuggled Backlog/argument/
+/// destructive word is rejected with 400 rather than sent.
 pub async fn config_get(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Form(form): Form<ConfigGetForm>,
 ) -> Result<Markup, AppError> {
-    validate_setting(&form.setting)?;
     let (host, _name, vendor) = device_host_and_name(&state, &id).await?;
+    validate_setting(vendor, &form.setting)?;
     let client = require_client(&state, &host, vendor)?;
     let target = state.target_for(&host).await;
     let value = ops::config_get(client.as_ref(), &target, &form.setting).await?;
@@ -194,10 +201,12 @@ pub struct ConfigSetForm {
     confirmed: Option<String>,
 }
 
-/// `POST /device/:id/config/set` - write a single setting. `validate_setting`
-/// runs FIRST, unconditionally (even before the confirm check), so an invalid
-/// setting is rejected on every request, confirmed or not. A valid setting is
-/// still destructive by nature (it writes device config) and always requires
+/// `POST /device/:id/config/set` - write a single setting. The device is
+/// looked up first (no network I/O, just a fleet read - see
+/// `device_host_and_name`) to get its vendor, then `validate_setting` runs,
+/// unconditionally and BEFORE the confirm check, so an invalid setting is
+/// rejected on every request, confirmed or not. A valid setting is still
+/// destructive by nature (it writes device config) and always requires
 /// `confirmed=true`, mirroring the CLI's unconditional `gate(..., true, ...)`
 /// for `config set`.
 pub async fn config_set(
@@ -205,7 +214,8 @@ pub async fn config_set(
     Path(id): Path<String>,
     Form(form): Form<ConfigSetForm>,
 ) -> Result<Response, AppError> {
-    validate_setting(&form.setting)?;
+    let (host, _name, vendor) = device_host_and_name(&state, &id).await?;
+    validate_setting(vendor, &form.setting)?;
     let confirmed = form.confirmed.as_deref() == Some("true");
     if !confirmed {
         let modal = confirm_modal(
@@ -216,7 +226,6 @@ pub async fn config_set(
         );
         return Ok(html! { (admin_result(html! {})) (modal) }.into_response());
     }
-    let (host, _name, vendor) = device_host_and_name(&state, &id).await?;
     let client = require_client(&state, &host, vendor)?;
     let target = state.target_for(&host).await;
     let value = ops::config_set(client.as_ref(), &target, &form.setting, &form.value).await?;

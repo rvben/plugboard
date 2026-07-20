@@ -1,5 +1,5 @@
 use maud::{Markup, html};
-use switchkit::{Capabilities, DeviceSnapshot, RelayState};
+use switchkit::{Capabilities, DeviceSnapshot, RelayState, Vendor};
 
 use crate::fleet::DeviceView;
 use crate::views::components::{na, signal_indicator, state_badge, vendor_tag};
@@ -138,13 +138,16 @@ pub fn admin_result(content: Markup) -> Markup {
     html! { div id="admin-result" { (content) } }
 }
 
-/// The per-device admin panel (Task 8): console, config get/set, firmware
-/// check/update, a config backup download link, and a disabled restore
-/// control. Every form targets `#admin-result` with an `outerHTML` swap; the
-/// handler behind each destructive action (`routes::admin`) decides whether
-/// to execute directly or return a confirm modal (an OOB swap into `#modal`)
-/// instead, reusing `tasmota_core::guardrail::classify` exactly like the CLI.
-/// `restore` has no route: its upload endpoint is unverified against a live
+/// The per-device admin panel (Task 8, now vendor-aware per Plan C Task 3):
+/// console, config get/set, firmware check/update, a config backup download
+/// link, and a disabled restore control. Every form targets `#admin-result`
+/// with an `outerHTML` swap; the handler behind each destructive action
+/// (`routes::admin`) decides whether to execute directly or return a confirm
+/// modal (an OOB swap into `#modal`) instead, classifying every command
+/// through the SAME shared `switchkit::guardrail::classify(dev.vendor, ..)`
+/// regardless of vendor - a Tasmota console command and a Shelly RPC method
+/// go through identical gating, never a vendor-specific bypass. `restore` has
+/// no route for any vendor: its upload endpoint is unverified against a live
 /// device (see `tasmota-cli`'s own `restore` refusal), so the control here is
 /// permanently disabled with an explanatory tooltip rather than wired to a
 /// handler that could report a false success.
@@ -155,21 +158,38 @@ pub fn admin_result(content: Markup) -> Markup {
 /// visible-but-disabled control implying a capability it doesn't have. When
 /// NONE of the three capabilities are confirmed (offline, unpolled, or a
 /// device with no admin surface at all), the whole panel - including
-/// `#admin-result` - is absent.
+/// `#admin-result` - is absent. This is exactly how Shelly Gen1 (no RPC
+/// console, `capabilities.console == false`) simply has no console/config
+/// subsection, without any vendor special-casing in this gate.
+///
+/// The console subsection's copy differs per vendor (Tasmota: bare command
+/// words like `Status 8`; Shelly: raw JSON-RPC method names like
+/// `Shelly.GetStatus`), but both post the SAME `command` field to the SAME
+/// `/device/:id/console` route, which dispatches via `SmartDevice::console`
+/// and classifies via the shared guardrail either way - there is no
+/// vendor-specific route or handler.
 fn admin_panel(dev: &DeviceView) -> Markup {
     let caps = capabilities(dev);
     if !caps.console && !caps.firmware_ota && !caps.config_backup {
         return html! {};
     }
     let id = &dev.id;
+    // `Vendor` is `#[non_exhaustive]`; a future variant this app doesn't yet
+    // know the command syntax for gets a vendor-neutral placeholder rather
+    // than falsely implying Tasmota or Shelly syntax.
+    let (console_heading, console_placeholder) = match dev.vendor {
+        Vendor::Tasmota => ("Console", "e.g. Status 8"),
+        Vendor::Shelly => ("RPC console", "e.g. Shelly.GetStatus"),
+        _ => ("Console", "Enter a command"),
+    };
     html! {
         section.admin-panel {
             h2 { "Admin" }
             @if caps.console {
                 div.admin-section.admin-console {
-                    h3 { "Console" }
+                    h3 { (console_heading) }
                     form hx-post=(format!("/device/{id}/console")) hx-target="#admin-result" hx-swap="outerHTML" {
-                        input type="text" name="command" placeholder="e.g. Status 8" required;
+                        input type="text" name="command" placeholder=(console_placeholder) required;
                         button type="submit" { "Run" }
                     }
                 }

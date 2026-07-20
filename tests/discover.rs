@@ -1,16 +1,18 @@
-//! Integration tests for device discovery (Task 9): route validation + the
-//! real scan wiring (empty path), results rendering (pure view), and add
-//! (including non-vacuous duplicate rejection).
+//! Integration tests for device discovery (Task 9, mixed-vendor per Plan C
+//! Task 3): route validation + the real scan wiring (empty path), results
+//! rendering (pure view), and add (including non-vacuous duplicate rejection
+//! and the server-side vendor-confirmation security gate).
 //!
-//! `hosts_in_cidr` yields bare IPs probed on port 80, so a route-level scan
+//! `hosts_in_cidr` yields bare IPs probed on port 80, so a route-level SCAN
 //! cannot reach an `httpmock` on a random loopback port, and putting a
 //! loopback host where only RFC 5737 device addresses are allowed is
-//! disallowed. Scan-REACHABILITY (a live device answering) is already
-//! `switchkit`'s tested contract; these tests only exercise what
-//! `tasmota-web` owns: the scan WIRING (the real `switchkit::discover` runs
-//! directly on the async runtime - no `spawn_blocking` - and returns empty
-//! for an unreachable doc range), the `(name, host)` rendering, and add - all
-//! with RFC 5737 addresses and no loopback host.
+//! disallowed - `scan_unreachable_range_returns_empty_hint` below stays on a
+//! documentation range. `POST /discover/add`, though, probes exactly ONE
+//! caller-supplied host (not a CIDR range), so it legitimately CAN target an
+//! `httpmock` address (`server.address()`) - that is the path the
+//! mixed-vendor / forged-vendor security tests below use to exercise the
+//! real `switchkit::discover` probe against both a mocked Tasmota and a
+//! mocked Shelly device.
 
 use std::path::PathBuf;
 
@@ -18,12 +20,56 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Request, Response, StatusCode};
 use http_body_util::BodyExt;
+use httpmock::prelude::*;
+use serde_json::json;
 use tower::ServiceExt;
 
+use switchkit::Vendor;
 use tasmota_web::config::Config;
 use tasmota_web::routes;
 use tasmota_web::state::AppState;
 use tasmota_web::views::discover;
+
+/// Mocks a Tasmota `Status 0` probe response (same shape as
+/// `tests/control.rs::mock_status`), enough for `tasmota_core::HttpTransport`'s
+/// `probe()` (via `parse::looks_like_tasmota`, which requires
+/// `StatusFWR.Version`) to confirm the host as Tasmota.
+fn mock_tasmota_status0(server: &MockServer) {
+    server.mock(|when, then| {
+        when.method(GET).path("/cm").query_param("cmnd", "Status 0");
+        then.status(200).json_body(json!({
+            "Status": {"DeviceName": "TestPlug", "Module": 1, "FriendlyName": ["TestPlug"], "Power": 1},
+            "StatusFWR": {"Version": "14.2.0"},
+            "StatusNET": {"IPAddress": "192.0.2.50", "Mac": "AA:BB:CC:00:11:22", "Hostname": "testplug"},
+            "StatusSTS": {"POWER": "ON", "Uptime": "1T02:03:04", "Wifi": {"RSSI": 76}}
+        }));
+    });
+}
+
+/// Mocks a Shelly Gen2 `/shelly` info response (same shape as
+/// `tests/admin.rs::mock_shelly_gen2_info`) plus the `/rpc/Shelly.GetStatus`
+/// call the Shelly `probe()` path also issues, enough for `shelly_core`'s
+/// `ShellyClient::probe()` to confirm the host as Shelly.
+fn mock_shelly_probe(server: &MockServer) {
+    server.mock(|when, then| {
+        when.method(GET).path("/shelly");
+        then.status(200).json_body(json!({
+            "id": "shellyplus1pm-aabbccddeeff",
+            "mac": "AABBCCDDEEFF",
+            "model": "SNSW-001P16EU",
+            "gen": 2,
+            "ver": "1.2.3",
+            "app": "Plus1PM",
+            "auth_en": false
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path("/rpc/Shelly.GetStatus");
+        then.status(200).json_body(json!({
+            "switch:0": {"output": true, "apower": 12.3}
+        }));
+    });
+}
 
 async fn get_cookie_and_token(app: &Router) -> (String, String) {
     let response = app
@@ -183,12 +229,14 @@ async fn scan_unreachable_range_returns_empty_hint() {
 // results rendering (pure view, no network)
 // ---------------------------------------------------------------------------
 
-/// `views::discover::results` lists the host and renders an Add form carrying
-/// `name`+`host` as hidden fields - the exact contract `routes::discover::scan`
-/// depends on when it maps `Discovered` to `(display_name, host)` pairs.
+/// `views::discover::results` lists the host, its discovered vendor, and
+/// renders an Add form carrying `name`+`host` (deliberately no `vendor`
+/// field - see the module doc comment and `routes::discover::add`) as hidden
+/// fields - the exact contract `routes::discover::scan` depends on when it
+/// maps `Discovered` to `(display_name, host, vendor)` triples.
 #[test]
 fn results_renders_host_and_add_form_hidden_fields() {
-    let found = vec![("Lab".to_string(), "192.0.2.5".to_string())];
+    let found = vec![("Lab".to_string(), "192.0.2.5".to_string(), Vendor::Tasmota)];
     let markup = discover::results(&found).into_string();
 
     assert!(
@@ -198,6 +246,10 @@ fn results_renders_host_and_add_form_hidden_fields() {
     assert!(
         markup.contains("Lab"),
         "body should list the display name, got: {markup}"
+    );
+    assert!(
+        markup.contains("Tasmota"),
+        "body should show the discovered vendor, got: {markup}"
     );
     assert!(
         markup.contains(r#"hx-post="/discover/add""#),
@@ -211,6 +263,29 @@ fn results_renders_host_and_add_form_hidden_fields() {
         markup.contains(r#"name="host" value="192.0.2.5""#),
         "the Add form must carry the host as a hidden field, got: {markup}"
     );
+    assert!(
+        !markup.contains(r#"name="vendor""#),
+        "the Add form must never carry a client-supplied vendor field - add() \
+         always re-confirms the vendor server-side, got: {markup}"
+    );
+}
+
+/// A Shelly discovery result renders the Shelly vendor tag, not Tasmota's -
+/// proves `results` actually threads the per-row vendor through rather than
+/// defaulting every row to the same label.
+#[test]
+fn results_renders_shelly_vendor_distinctly_from_tasmota() {
+    let found = vec![
+        ("Lab".to_string(), "192.0.2.5".to_string(), Vendor::Tasmota),
+        (
+            "Plug".to_string(),
+            "198.51.100.5".to_string(),
+            Vendor::Shelly,
+        ),
+    ];
+    let markup = discover::results(&found).into_string();
+    assert!(markup.contains("Tasmota"), "got: {markup}");
+    assert!(markup.contains("Shelly"), "got: {markup}");
 }
 
 /// An empty result renders the hint, not an empty (or missing) list element.
@@ -225,10 +300,14 @@ fn results_renders_hint_when_empty() {
 // add
 // ---------------------------------------------------------------------------
 
-/// `POST /discover/add` appends a new device to both the config and the
-/// fleet.
+/// `POST /discover/add` re-probes the host (see `probe_host`), and on a
+/// confirmed vendor appends a new device to both the config and the fleet.
 #[tokio::test]
 async fn add_appends_device_to_config_and_fleet() {
+    let server = MockServer::start();
+    mock_tasmota_status0(&server);
+    let host = server.address().to_string();
+
     let path = temp_config_path("appends");
     let state = AppState::new(Config::default(), path.clone());
     let app = routes::router(state.clone(), false);
@@ -239,26 +318,31 @@ async fn add_appends_device_to_config_and_fleet() {
         &cookie,
         &token,
         "/discover/add",
-        "name=Lab&host=192.0.2.5",
+        &format!("name=Lab&host={host}"),
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
 
     let cfg = state.inner.config.read().await;
     assert_eq!(cfg.devices.len(), 1);
-    assert_eq!(cfg.devices[0].host, "192.0.2.5");
+    assert_eq!(cfg.devices[0].host, host);
     assert_eq!(cfg.devices[0].name, "Lab");
+    assert_eq!(
+        cfg.devices[0].vendor,
+        Vendor::Tasmota,
+        "the persisted vendor must be the one the server-side probe confirmed"
+    );
     drop(cfg);
 
     let fleet = state.inner.fleet.read().await;
     assert_eq!(fleet.devices.len(), 1);
-    assert_eq!(fleet.devices[0].host, "192.0.2.5");
+    assert_eq!(fleet.devices[0].host, host);
 
     // The add also persisted to disk (state.save_config(), off the async
     // runtime): reload from the path and confirm the device survived.
     let reloaded = Config::load(&path).expect("saved config should reload");
     assert_eq!(reloaded.devices.len(), 1);
-    assert_eq!(reloaded.devices[0].host, "192.0.2.5");
+    assert_eq!(reloaded.devices[0].host, host);
     let _ = std::fs::remove_file(&path);
 }
 
@@ -267,6 +351,10 @@ async fn add_appends_device_to_config_and_fleet() {
 /// fleet/config still contain exactly one entry for that host, never two.
 #[tokio::test]
 async fn add_rejects_duplicate_host_without_duplicating() {
+    let server = MockServer::start();
+    mock_tasmota_status0(&server);
+    let host = server.address().to_string();
+
     let path = temp_config_path("duplicate");
     let state = AppState::new(Config::default(), path.clone());
     let app = routes::router(state.clone(), false);
@@ -277,7 +365,7 @@ async fn add_rejects_duplicate_host_without_duplicating() {
         &cookie,
         &token,
         "/discover/add",
-        "name=Lab&host=192.0.2.5",
+        &format!("name=Lab&host={host}"),
     )
     .await;
     assert_eq!(first.status(), StatusCode::OK, "the first add must succeed");
@@ -287,7 +375,7 @@ async fn add_rejects_duplicate_host_without_duplicating() {
         &cookie,
         &token,
         "/discover/add",
-        "name=Lab+Duplicate&host=192.0.2.5",
+        &format!("name=Lab+Duplicate&host={host}"),
     )
     .await;
     assert!(
@@ -332,6 +420,10 @@ async fn add_rejects_duplicate_host_without_duplicating() {
 /// come back 400 instead of failing again with a save error.
 #[tokio::test]
 async fn add_rolls_back_on_save_failure_without_ghosting() {
+    let server = MockServer::start();
+    mock_tasmota_status0(&server);
+    let host = server.address().to_string();
+
     let blocker = std::env::temp_dir().join(format!(
         "tasmota-web-test-discover-blocker-{}.tmp",
         std::process::id()
@@ -348,7 +440,7 @@ async fn add_rolls_back_on_save_failure_without_ghosting() {
         &cookie,
         &token,
         "/discover/add",
-        "name=Lab&host=192.0.2.9",
+        &format!("name=Lab&host={host}"),
     )
     .await;
     assert_eq!(
@@ -379,7 +471,7 @@ async fn add_rolls_back_on_save_failure_without_ghosting() {
         &cookie,
         &token,
         "/discover/add",
-        "name=Lab&host=192.0.2.9",
+        &format!("name=Lab&host={host}"),
     )
     .await;
     assert_ne!(
@@ -390,4 +482,133 @@ async fn add_rolls_back_on_save_failure_without_ghosting() {
     );
 
     let _ = std::fs::remove_file(&blocker);
+}
+
+// ---------------------------------------------------------------------------
+// mixed-vendor add + the SECURITY gate (server-side re-probe, never a
+// caller-supplied vendor)
+// ---------------------------------------------------------------------------
+
+/// `add` persists the vendor `switchkit::discover` confirms for a mocked
+/// Shelly host - proves the mixed-vendor probe actually reaches and
+/// recognizes Shelly, not just Tasmota (every other `add_*` test above uses a
+/// Tasmota fixture).
+#[tokio::test]
+async fn add_persists_probe_confirmed_vendor_for_a_mocked_shelly_host() {
+    let server = MockServer::start();
+    mock_shelly_probe(&server);
+    let host = server.address().to_string();
+
+    let path = temp_config_path("shelly-confirmed");
+    let state = AppState::new(Config::default(), path.clone());
+    let app = routes::router(state.clone(), false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    let response = post_form(
+        &app,
+        &cookie,
+        &token,
+        "/discover/add",
+        &format!("name=Plug&host={host}"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let cfg = state.inner.config.read().await;
+    assert_eq!(cfg.devices.len(), 1);
+    assert_eq!(
+        cfg.devices[0].vendor,
+        Vendor::Shelly,
+        "the persisted vendor must be the one the server-side probe confirmed"
+    );
+    drop(cfg);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A host that no wired client confirms as any vendor is REJECTED and never
+/// added - never guessed, never defaulted to Tasmota. Proven non-vacuous:
+/// the SAME state, after the rejection, still has zero devices in both config
+/// and fleet.
+#[tokio::test]
+async fn add_rejects_a_host_no_vendor_confirms_without_adding() {
+    // A mock server that answers HTTP but confirms neither vendor's probe:
+    // no `/cm` (Tasmota) or `/shelly` (Shelly) mock is registered, so every
+    // vendor probe gets a 404/connection-refused-shaped mismatch, not a hang.
+    let server = MockServer::start();
+    let host = server.address().to_string();
+
+    let path = temp_config_path("no-vendor-confirms");
+    let state = AppState::new(Config::default(), path.clone());
+    let app = routes::router(state.clone(), false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    let response = post_form(
+        &app,
+        &cookie,
+        &token,
+        "/discover/add",
+        &format!("name=Mystery&host={host}"),
+    )
+    .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "a host no vendor confirms must be rejected, never added"
+    );
+
+    let cfg = state.inner.config.read().await;
+    assert!(
+        cfg.devices.is_empty(),
+        "a rejected host must never be persisted to config"
+    );
+    drop(cfg);
+
+    let fleet = state.inner.fleet.read().await;
+    assert!(
+        fleet.devices.is_empty(),
+        "a rejected host must never be added to the fleet"
+    );
+    drop(fleet);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// SECURITY: a forged `vendor` field in the POST body is ignored - `AddForm`
+/// has no `vendor` field to deserialize it into, so the persisted vendor
+/// comes ONLY from the server-side probe. Proven non-vacuous: the host is
+/// mocked as SHELLY, the form claims `vendor=tasmota`, and the persisted
+/// device is Shelly, not Tasmota - if the handler ever read a submitted
+/// vendor field, this would silently persist Tasmota instead and the
+/// assertion below would fail.
+#[tokio::test]
+async fn add_ignores_forged_vendor_form_field_and_persists_the_probed_vendor() {
+    let server = MockServer::start();
+    mock_shelly_probe(&server);
+    let host = server.address().to_string();
+
+    let path = temp_config_path("forged-vendor");
+    let state = AppState::new(Config::default(), path.clone());
+    let app = routes::router(state.clone(), false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    let response = post_form(
+        &app,
+        &cookie,
+        &token,
+        "/discover/add",
+        &format!("name=Plug&host={host}&vendor=tasmota"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let cfg = state.inner.config.read().await;
+    assert_eq!(cfg.devices.len(), 1);
+    assert_eq!(
+        cfg.devices[0].vendor,
+        Vendor::Shelly,
+        "a forged vendor=tasmota form field must be ignored; the persisted \
+         vendor must be the one the server-side probe against the mocked \
+         Shelly host actually confirmed"
+    );
+    drop(cfg);
+    let _ = std::fs::remove_file(&path);
 }
