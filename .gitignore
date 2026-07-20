@@ -1,8 +1,11 @@
 /target
 Cargo.lock.orig
 .cargo/config.toml
-tasmota-web.toml
-# Local design/implementation docs - not committed (per repo convention).
+plugboard.toml
+# Local design/implementation docs + agent scratch - not committed or published.
 docs/superpowers/
+.superpowers/
+CLAUDE.md
+CLAUDE.local.md
 .DS_Store
 *.swp
