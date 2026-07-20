@@ -532,7 +532,7 @@ async fn bulk_power_invalid_action_returns_bad_request() {
 /// CRITICAL regression test: `tasmota-core` builds device request URLs with
 /// credentials in the query string (`.../cm?cmnd=...&user=admin&password=...`),
 /// and `ureq` attaches the full request URL to a transport-level error (e.g.
-/// connection refused). A raw `tasmota_core::Error` rendered into the toggle
+/// connection refused). A raw `switchkit::Error` rendered into the toggle
 /// route's response body would leak the device's plaintext password. This
 /// drives a REAL connection-refused failure (a bound-then-dropped TCP
 /// listener, so the port is guaranteed closed) against a device configured

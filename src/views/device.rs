@@ -1,5 +1,5 @@
 use maud::{Markup, html};
-use tasmota_core::{DeviceStatus, RelayState};
+use switchkit::{DeviceSnapshot, RelayState};
 
 use crate::fleet::DeviceView;
 use crate::views::components::{na, signal_indicator, state_badge};
@@ -8,7 +8,7 @@ use crate::views::components::{na, signal_indicator, state_badge};
 /// `reachable` guard `DeviceView::power_w`/`today_kwh`/`rssi` already apply,
 /// so every section below reads live data through one place: an offline
 /// device never leaks a stale `status` as though it were current.
-fn live_status(dev: &DeviceView) -> Option<&DeviceStatus> {
+fn live_status(dev: &DeviceView) -> Option<&DeviceSnapshot> {
     if dev.is_online() {
         dev.status.as_ref()
     } else {
@@ -58,7 +58,13 @@ fn energy_section(dev: &DeviceView) -> Markup {
                 dt { "Voltage" } dd { (na(energy.and_then(|e| e.voltage_v))) " V" }
                 dt { "Current" } dd { (na(energy.and_then(|e| e.current_a))) " A" }
                 dt { "Today" } dd { (na(energy.and_then(|e| e.today_kwh))) " kWh" }
-                dt { "Yesterday" } dd { (na(energy.and_then(|e| e.yesterday_kwh))) " kWh" }
+                // `switchkit`'s vendor-neutral `Energy` model carries no
+                // yesterday-kWh field for any vendor (Tasmota's own status
+                // response has one, but the async `SmartDevice` trait this app
+                // now runs on does not surface it), so this row is permanently
+                // `n/a` rather than removed - a genuine, unavoidable behavior
+                // change from the old sync `tasmota-core` path, not a bug.
+                dt { "Yesterday" } dd { (na::<f64>(None)) " kWh" }
                 dt { "Total" } dd { (na(energy.and_then(|e| e.total_kwh))) " kWh" }
             }
         }
@@ -66,7 +72,9 @@ fn energy_section(dev: &DeviceView) -> Markup {
 }
 
 fn firmware_section(dev: &DeviceView) -> Markup {
-    let firmware = live_status(dev).and_then(|s| s.firmware.clone());
+    let firmware = live_status(dev)
+        .and_then(|s| s.firmware.as_ref())
+        .and_then(|f| f.version.clone());
     html! {
         section.firmware {
             h2 { "Firmware" }
@@ -100,19 +108,23 @@ fn uptime_section(dev: &DeviceView) -> Markup {
     }
 }
 
-fn mqtt_section(dev: &DeviceView) -> Markup {
-    let mqtt = live_status(dev).and_then(|s| s.mqtt.as_ref());
+/// `switchkit`'s vendor-neutral `DeviceSnapshot` carries no MQTT status at
+/// all (unlike Tasmota's own status response, which the old sync
+/// `tasmota_core` path used to read this whole section from): every field
+/// here is now permanently `n/a`, not merely the "Connected" flag that was
+/// already hard-coded before this migration (Tasmota never exposed a
+/// reliable live MQTT connected/disconnected flag over HTTP either). This is
+/// a genuine, unavoidable behavior change; the section is kept (rather than
+/// removed) so the page layout is unchanged.
+fn mqtt_section(_dev: &DeviceView) -> Markup {
     html! {
         section.mqtt {
             h2 { "MQTT" }
             dl {
-                dt { "Host" } dd { (na(mqtt.and_then(|m| m.host.clone()))) }
-                dt { "Port" } dd { (na(mqtt.and_then(|m| m.port))) }
-                dt { "Client" } dd { (na(mqtt.and_then(|m| m.client.clone()))) }
-                dt { "Reconnects" } dd { (na(mqtt.and_then(|m| m.reconnect_count))) }
-                // Tasmota exposes no reliable live MQTT connected/disconnected flag over
-                // HTTP. This is hard-coded to `n/a` regardless of what `mqtt.connected`
-                // reports (even `Some(true)`): it must never render a guessed bool.
+                dt { "Host" } dd { (na::<String>(None)) }
+                dt { "Port" } dd { (na::<u16>(None)) }
+                dt { "Client" } dd { (na::<String>(None)) }
+                dt { "Reconnects" } dd { (na::<u32>(None)) }
                 dt { "Connected" } dd { (na::<bool>(None)) }
             }
         }

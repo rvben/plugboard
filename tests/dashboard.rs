@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use tasmota_core::{DeviceStatus, Energy, MqttInfo, NetInfo, Relay, RelayState};
+use switchkit::{DeviceSnapshot, Energy, Firmware, NetInfo, Relay, RelayState, Signal};
 use tasmota_web::config::{Config, DeviceConfig};
 use tasmota_web::fleet::device_id;
 use tasmota_web::routes;
@@ -14,19 +14,19 @@ use tasmota_web::state::AppState;
 
 /// A status with no `energy` block at all: the device has no energy sensor,
 /// which must render as "n/a", never as "0 W".
-fn status_without_energy(host: &str) -> DeviceStatus {
-    DeviceStatus {
+fn status_without_energy(host: &str) -> DeviceSnapshot {
+    DeviceSnapshot {
         host: host.into(),
         name: Some("Test Plug".into()),
-        friendly_names: vec!["Test Plug".into()],
-        module: Some(1),
         relays: Vec::new(),
-        firmware: Some("14.2.0".into()),
+        firmware: Some(Firmware {
+            version: Some("14.2.0".into()),
+            update_available: None,
+        }),
         net: NetInfo::default(),
         uptime: Some("1T00:00:00".into()),
-        wifi_rssi: None,
         energy: None,
-        mqtt: None,
+        ..Default::default()
     }
 }
 
@@ -85,48 +85,49 @@ async fn dashboard_renders_card_with_na_for_missing_energy() {
 }
 
 /// A status with a PARTIAL energy block (some fields present, some absent)
-/// and an MQTT block whose `connected` is `Some(true)` - the exact shape
-/// needed to prove the detail page's "connected is always n/a" rule is
-/// non-vacuous (it must hide a `true`, not just an absent value).
-fn status_with_partial_energy_and_mqtt(host: &str) -> DeviceStatus {
-    DeviceStatus {
+/// and a real Wi-Fi signal reading - the exact shape needed to prove present
+/// fields render their real values while absent ones render n/a, never 0.
+fn status_with_partial_energy(host: &str) -> DeviceSnapshot {
+    DeviceSnapshot {
         host: host.into(),
         name: Some("Test Plug".into()),
-        friendly_names: vec!["Test Plug".into()],
-        module: Some(1),
         relays: vec![Relay {
             index: 0,
             state: RelayState::On,
             raw: "ON".into(),
         }],
-        firmware: Some("14.2.0".into()),
+        firmware: Some(Firmware {
+            version: Some("14.2.0".into()),
+            update_available: None,
+        }),
         net: NetInfo {
             ip: Some("192.0.2.31".into()),
             mac: Some("AA:BB:CC:DD:EE:FF".into()),
             hostname: None,
         },
         uptime: Some("2T01:02:03".into()),
-        wifi_rssi: Some(-55),
+        signal: Some(Signal::from_quality_percent(63)),
         energy: Some(Energy {
             power_w: Some(12.5),
             voltage_v: None,
             current_a: Some(0.5),
             today_kwh: None,
-            yesterday_kwh: Some(0.8),
             total_kwh: None,
         }),
-        mqtt: Some(MqttInfo {
-            host: Some("mqtt.example.test".into()),
-            port: Some(1883),
-            client: Some("tasmota_ABC123".into()),
-            reconnect_count: Some(3),
-            connected: Some(true),
-        }),
+        ..Default::default()
     }
 }
 
+/// `switchkit`'s vendor-neutral `DeviceSnapshot` carries no MQTT data at all
+/// (a genuine, unavoidable capability gap vs. the old Tasmota-specific model -
+/// see `views::device::mqtt_section`), so the whole MQTT section is now
+/// hard-coded n/a unconditionally: there is no longer any status field to
+/// feed a live MQTT value through, so this can no longer be proven
+/// non-vacuously against a "device reports MQTT connected" fixture the way
+/// the pre-migration test did. This test instead asserts the section's
+/// unconditional n/a rendering directly.
 #[tokio::test]
-async fn device_detail_renders_partial_status_with_na_and_hides_mqtt_bool() {
+async fn device_detail_renders_partial_status_with_na_and_mqtt_always_na() {
     let host = "192.0.2.31".to_string();
     let config = Config {
         devices: vec![DeviceConfig {
@@ -144,7 +145,7 @@ async fn device_detail_renders_partial_status_with_na_and_hides_mqtt_bool() {
         let mut fleet = state.inner.fleet.write().await;
         let dev = fleet.devices.first_mut().expect("one device configured");
         dev.reachable = true;
-        dev.status = Some(status_with_partial_energy_and_mqtt(&host));
+        dev.status = Some(status_with_partial_energy(&host));
     }
 
     let app = routes::router(state, false);
@@ -165,35 +166,29 @@ async fn device_detail_renders_partial_status_with_na_and_hides_mqtt_bool() {
     // Present fields render their real values.
     assert!(body.contains("12.5"), "present power_w should render");
     assert!(body.contains("0.5"), "present current_a should render");
-    assert!(body.contains("0.8"), "present yesterday_kwh should render");
     assert!(body.contains("14.2.0"), "firmware should render");
     assert!(body.contains("192.0.2.31"), "ip should render");
-    assert!(
-        body.contains("mqtt.example.test"),
-        "mqtt host should render"
-    );
-    assert!(body.contains("1883"), "mqtt port should render");
+    assert!(body.contains("63%"), "present Wi-Fi signal should render");
 
-    // Absent fields (voltage_v, today_kwh, total_kwh, net.hostname) each render
-    // the muted n/a marker, never 0 or blank - plus the always-n/a mqtt connected line.
+    // Absent fields (voltage_v, today_kwh, total_kwh, net.hostname), the
+    // permanently-n/a "Yesterday" row, and all five permanently-n/a MQTT
+    // fields each render the muted n/a marker, never 0 or blank.
     let na_count = body.matches(">n/a<").count();
     assert!(
-        na_count >= 5,
-        "expected at least 5 n/a markers for the absent fields, got {na_count}"
+        na_count >= 10,
+        "expected at least 10 n/a markers (4 absent fields + yesterday + 5 mqtt fields), got {na_count}"
     );
     assert!(
         !body.contains(">0<"),
         "absent numeric fields must never render as a bare 0"
     );
 
-    // MQTT `connected` is HARD-CODED to n/a, even though this device's status
-    // has `mqtt.connected = Some(true)`: proves the hardcoding is non-vacuous
-    // (a naive `na(mqtt.connected)` would render the bool as the text `>true<`
-    // here, not `n/a`). Scoped to a bool rendered as element text, so a legitimate
-    // attribute value like `aria-hidden="true"` does not trip this check.
+    // The MQTT section is unconditionally n/a under switchkit's vendor-neutral
+    // model: no live MQTT value can leak, since there is no status field left
+    // to source one from.
     assert!(
         !body.contains(">true<"),
-        "mqtt connected must never leak the underlying bool as text"
+        "mqtt connected must never leak a bool as text"
     );
 }
 

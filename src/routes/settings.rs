@@ -125,7 +125,7 @@ pub struct CredentialsForm {
 /// clear) a device's stored password. Write-only: `DeviceConfig.password` is
 /// never rendered back into any page - see `views::settings::device_row` and
 /// `tests/settings.rs`'s non-vacuous proof. The fleet needs no rebuild for
-/// this: `AppState::addr_for` reads `DeviceConfig.password` fresh from config
+/// this: `AppState::target_for` reads `DeviceConfig.password` fresh from config
 /// on every call, so a credential change takes effect on the very next
 /// request without any cached copy to update.
 pub async fn credentials(

@@ -1,12 +1,14 @@
 //! Credential scrubbing for any text that may embed a device request URL.
 //!
-//! `tasmota-core` builds device request URLs with credentials in the query
-//! string (`http://host/cm?cmnd=...&user=admin&password=SECRET`), and `ureq`
-//! attaches the full request URL to transport-level errors (timeout,
-//! connection refused, DNS failure). A raw `tasmota_core::Error` rendered to
-//! text can therefore carry a device's plaintext password, so every sink
-//! that turns one into a string (an HTTP response body, a log line, or
-//! stored fleet state) must scrub it first with [`scrub_credentials`].
+//! A vendor client (`tasmota-core`, `shelly-core`) builds device request
+//! URLs with credentials in the query string or as HTTP basic auth
+//! (`http://host/cm?cmnd=...&user=admin&password=SECRET`), and the
+//! underlying HTTP client attaches the full request URL to transport-level
+//! errors (timeout, connection refused, DNS failure). A raw
+//! `switchkit::Error` rendered to text can therefore carry a device's
+//! plaintext password, so every sink that turns one into a string (an HTTP
+//! response body, a log line, or stored fleet state) must scrub it first
+//! with [`scrub_credentials`].
 
 /// Redacts the values of `user=` and `password=` query-string parameters
 /// (case-insensitive key match) wherever they appear in `s`, replacing each

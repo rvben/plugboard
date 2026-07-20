@@ -6,11 +6,11 @@
 //! cannot reach an `httpmock` on a random loopback port, and putting a
 //! loopback host where only RFC 5737 device addresses are allowed is
 //! disallowed. Scan-REACHABILITY (a live device answering) is already
-//! `tasmota-core`'s tested contract; these tests only exercise what
-//! `tasmota-web` owns: the scan WIRING (the real `discovery::scan` runs
-//! inside `spawn_blocking` and returns empty for an unreachable doc range),
-//! the `(name, host)` rendering, and add - all with RFC 5737 addresses and no
-//! loopback host.
+//! `switchkit`'s tested contract; these tests only exercise what
+//! `tasmota-web` owns: the scan WIRING (the real `switchkit::discover` runs
+//! directly on the async runtime - no `spawn_blocking` - and returns empty
+//! for an unreachable doc range), the `(name, host)` rendering, and add - all
+//! with RFC 5737 addresses and no loopback host.
 
 use std::path::PathBuf;
 
@@ -145,16 +145,15 @@ async fn scan_rejects_invalid_range_with_bad_request() {
 }
 
 /// A syntactically valid but unreachable documentation range runs the REAL
-/// `discovery::scan` inside `spawn_blocking` (proving the wiring compiles and
-/// executes on a real worker) and returns 200 with the empty-results hint,
-/// never an error and never a fabricated row.
+/// `switchkit::discover` directly on the async runtime (proving the wiring
+/// compiles and executes end to end, no `spawn_blocking`) and returns 200
+/// with the empty-results hint, never an error and never a fabricated row.
 ///
 /// Proves the real scan wiring returns 200 + the hint end to end against an
-/// unreachable range. `tasmota-core` 0.1.2+ bounds the TCP connect (its
-/// `HttpTransport` sets ureq's `.timeout_connect()` to 2s), so an unreachable
-/// host fails fast instead of paying ureq's 30s connect default. The empty-hint
-/// RENDERING itself also stays covered by the fast, network-free
-/// `results_renders_hint_when_empty` below.
+/// unreachable range. The Tasmota client's `HttpTransport` bounds its connect
+/// timeout, so an unreachable host fails fast rather than hanging the test.
+/// The empty-hint RENDERING itself also stays covered by the fast,
+/// network-free `results_renders_hint_when_empty` below.
 #[tokio::test]
 async fn scan_unreachable_range_returns_empty_hint() {
     let app = test_app();

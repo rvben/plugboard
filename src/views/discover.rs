@@ -1,8 +1,8 @@
 //! Device discovery page (Task 9): a CIDR scan form, its results, and an
 //! "Add" action per found device. `results` deliberately takes `(display_name,
-//! host)` pairs rather than `tasmota_core::discovery::Discovered`, so this
-//! view carries no device-status coupling and is trivially testable with
-//! documentation IPs (see `tests/discover.rs`).
+//! host)` pairs rather than `switchkit::Discovered`, so this view carries no
+//! device-status coupling and is trivially testable with documentation IPs
+//! (see `tests/discover.rs`).
 
 use maud::{Markup, html};
 

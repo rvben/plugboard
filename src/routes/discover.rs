@@ -1,13 +1,13 @@
 //! Device discovery routes (Task 9): `GET /discover` (the CIDR scan form),
-//! `POST /discover/scan` (runs `tasmota_core::discovery::scan`, blocking, off
-//! the async runtime), and `POST /discover/add` (persists a found device into
-//! the config and fleet).
+//! `POST /discover/scan` (runs `switchkit::discover` against the fleet's
+//! wired vendor clients, fully async), and `POST /discover/add` (persists a
+//! found device into the config and fleet).
 
 use axum::Form;
 use axum::extract::State;
 use maud::{Markup, html};
 use serde::Deserialize;
-use tasmota_core::discovery;
+use switchkit::{SmartDevice, Vendor};
 
 use crate::auth::Csrf;
 use crate::config::DeviceConfig;
@@ -25,7 +25,7 @@ const RANGE_PLACEHOLDER: &str = "192.0.2.0/24";
 /// `GET /discover` - the CIDR scan form, pre-filled with the host's detected
 /// local subnet, or `RANGE_PLACEHOLDER` when detection fails.
 pub async fn index(csrf: Csrf) -> Markup {
-    let default_range = discovery::detect_local_cidr().unwrap_or_else(|| RANGE_PLACEHOLDER.into());
+    let default_range = switchkit::detect_local_cidr().unwrap_or_else(|| RANGE_PLACEHOLDER.into());
     layout::page("Discover", &csrf.0, discover::page(&default_range))
 }
 
@@ -36,26 +36,37 @@ pub struct ScanForm {
 
 /// `POST /discover/scan` - expand the CIDR (rejecting a malformed or
 /// too-large range with 400 before any network I/O, via `hosts_in_cidr`'s own
-/// scan-size guard), then scan it. `discovery::scan` is synchronous/blocking
-/// (it uses OS threads internally), so it runs inside `spawn_blocking` rather
-/// than on the async runtime. An empty result (no reachable Tasmota device in
-/// the range) renders `discover::results`' own hint, never an error.
+/// scan-size guard), then probe every host against every vendor client wired
+/// up in `AppState` (Tasmota only for now - see `AppState::client`; a future
+/// vendor with a wired client joins this list for free). `switchkit::discover`
+/// is itself async (a bounded, concurrent fan-out), so this runs directly on
+/// the async runtime - no `spawn_blocking`, unlike the old `tasmota_core`
+/// blocking scan this replaces. An empty result (no device confirmed by any
+/// client in the range) renders `discover::results`' own hint, never an error.
 pub async fn scan(
     State(state): State<AppState>,
     Form(form): Form<ScanForm>,
 ) -> Result<Markup, AppError> {
-    // `hosts_in_cidr` returns a `tasmota_core::Error` too; scrub it like every
+    // `hosts_in_cidr` returns a `switchkit::Error` too; scrub it like every
     // other one even though this particular path runs before any network I/O
     // and cannot realistically carry a credential.
-    let hosts = discovery::hosts_in_cidr(&form.range)
+    let hosts = switchkit::hosts_in_cidr(&form.range)
         .map_err(|e| AppError::BadRequest(scrub_credentials(&e.to_string())))?;
-    let transport = state.inner.transport.clone();
-    let found = tokio::task::spawn_blocking(move || discovery::scan(&transport, &hosts, 64, None))
-        .await
-        .map_err(|e| AppError::Internal(e.to_string()))?;
+    let Some(tasmota) = state.client(Vendor::Tasmota) else {
+        return Err(AppError::Internal(
+            "no client configured for Tasmota".into(),
+        ));
+    };
+    let clients: [&dyn SmartDevice; 1] = [tasmota.as_ref()];
+    let found = switchkit::discover(&clients, &hosts, 64, None).await;
     let pairs: Vec<(String, String)> = found
         .iter()
-        .map(|d| (d.status.display_name().to_string(), d.host.clone()))
+        .map(|d| {
+            (
+                d.snapshot.display_name().to_string(),
+                d.snapshot.host.clone(),
+            )
+        })
         .collect();
     Ok(discover::results(&pairs))
 }

@@ -10,6 +10,11 @@
 //! a bare destructive command word is rejected with 400 before any network
 //! I/O. `restore` is intentionally not wired to a route (see the admin panel
 //! view): its upload endpoint is unverified against a live device.
+//!
+//! Guardrail classification stays on `tasmota_core::guardrail` (unchanged):
+//! the fleet is Tasmota-only for now (Task 2 adds a real per-device `vendor`
+//! field to config), and console/config are Tasmota command semantics either
+//! way, so there is no vendor-neutral guardrail to switch to yet.
 
 use axum::Form;
 use axum::extract::{Path, State};
@@ -18,23 +23,41 @@ use axum::response::{IntoResponse, Response};
 use maud::{Markup, html};
 use serde::Deserialize;
 use serde_json::Value;
+use switchkit::Vendor;
 use tasmota_core::guardrail::{self, Hazard};
 
 use crate::error::AppError;
 use crate::ops;
 use crate::state::AppState;
-use crate::views::components::{close_modal, confirm_modal};
+use crate::views::components::{close_modal, confirm_modal, na};
 use crate::views::device::admin_result;
 
-/// Look up a device's `(host, display_name)` by id without doing any network
-/// I/O, so a gated (unconfirmed) request can 404 on an unknown device while
-/// still never touching the network.
-async fn device_host_and_name(state: &AppState, id: &str) -> Result<(String, String), AppError> {
+/// Look up a device's `(host, display_name, vendor)` by id without doing any
+/// network I/O, so a gated (unconfirmed) request can 404 on an unknown
+/// device while still never touching the network.
+async fn device_host_and_name(
+    state: &AppState,
+    id: &str,
+) -> Result<(String, String, Vendor), AppError> {
     let fleet = state.inner.fleet.read().await;
     let dev = fleet
         .get(id)
         .ok_or_else(|| AppError::NotFound(id.to_string()))?;
-    Ok((dev.host.clone(), dev.display_name().to_string()))
+    Ok((dev.host.clone(), dev.display_name().to_string(), dev.vendor))
+}
+
+/// Resolves `vendor`'s async client. `AppState::client` returns `None` only
+/// for a vendor this app has no client wired up for; surfaced as a 500 rather
+/// than silently doing nothing, since every device currently in the fleet
+/// defaults to `Vendor::Tasmota`, which is always wired.
+fn require_client(
+    state: &AppState,
+    host: &str,
+    vendor: Vendor,
+) -> Result<std::sync::Arc<dyn switchkit::SmartDevice + Send + Sync>, AppError> {
+    state
+        .client(vendor)
+        .ok_or_else(|| AppError::Internal(format!("no client configured for {host}'s vendor")))
 }
 
 /// Renders a device operation's raw JSON response, auto-escaped by maud like
@@ -111,7 +134,7 @@ pub async fn console(
     Path(id): Path<String>,
     Form(form): Form<ConsoleForm>,
 ) -> Result<Response, AppError> {
-    let (host, _name) = device_host_and_name(&state, &id).await?;
+    let (host, _name, vendor) = device_host_and_name(&state, &id).await?;
     let confirmed = form.confirmed.as_deref() == Some("true");
     let hazard = guardrail::classify(&form.command);
     let needs_confirm = matches!(
@@ -137,8 +160,9 @@ pub async fn console(
         );
         return Ok(html! { (admin_result(html! {})) (modal) }.into_response());
     }
-    let addr = state.addr_for(&host).await;
-    let value = ops::console(&state.inner.transport, addr, form.command.clone()).await?;
+    let client = require_client(&state, &host, vendor)?;
+    let target = state.target_for(&host).await;
+    let value = ops::console(client.as_ref(), &target, &form.command).await?;
     Ok(html! { (admin_result(result_block(&value))) (close_modal()) }.into_response())
 }
 
@@ -156,9 +180,10 @@ pub async fn config_get(
     Form(form): Form<ConfigGetForm>,
 ) -> Result<Markup, AppError> {
     validate_setting(&form.setting)?;
-    let (host, _name) = device_host_and_name(&state, &id).await?;
-    let addr = state.addr_for(&host).await;
-    let value = ops::config_get(&state.inner.transport, addr, form.setting.clone()).await?;
+    let (host, _name, vendor) = device_host_and_name(&state, &id).await?;
+    let client = require_client(&state, &host, vendor)?;
+    let target = state.target_for(&host).await;
+    let value = ops::config_get(client.as_ref(), &target, &form.setting).await?;
     Ok(admin_result(result_block(&value)))
 }
 
@@ -191,28 +216,28 @@ pub async fn config_set(
         );
         return Ok(html! { (admin_result(html! {})) (modal) }.into_response());
     }
-    let (host, _name) = device_host_and_name(&state, &id).await?;
-    let addr = state.addr_for(&host).await;
-    let value = ops::config_set(
-        &state.inner.transport,
-        addr,
-        form.setting.clone(),
-        form.value.clone(),
-    )
-    .await?;
+    let (host, _name, vendor) = device_host_and_name(&state, &id).await?;
+    let client = require_client(&state, &host, vendor)?;
+    let target = state.target_for(&host).await;
+    let value = ops::config_set(client.as_ref(), &target, &form.setting, &form.value).await?;
     Ok(html! { (admin_result(result_block(&value))) (close_modal()) }.into_response())
 }
 
 /// `POST /device/:id/firmware/check` - read-only firmware version check, no
-/// confirm modal.
+/// confirm modal. `ops::firmware_version` returns `Option<String>` (some
+/// devices report no firmware version at all), rendered through `na()` like
+/// every other possibly-absent value rather than assumed present.
 pub async fn firmware_check(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Markup, AppError> {
-    let (host, _name) = device_host_and_name(&state, &id).await?;
-    let addr = state.addr_for(&host).await;
-    let version = ops::firmware_version(&state.inner.transport, addr).await?;
-    Ok(admin_result(html! { p { "Firmware version: " (version) } }))
+    let (host, _name, vendor) = device_host_and_name(&state, &id).await?;
+    let client = require_client(&state, &host, vendor)?;
+    let target = state.target_for(&host).await;
+    let version = ops::firmware_version(client.as_ref(), &target).await?;
+    Ok(admin_result(
+        html! { p { "Firmware version: " (na(version)) } },
+    ))
 }
 
 #[derive(Deserialize)]
@@ -225,8 +250,14 @@ pub struct FirmwareUpdateForm {
 /// OTA URL, or the given `url`). Always destructive: without `confirmed=true`
 /// this returns a confirm modal carrying the original `url` (when given) and
 /// never touches the device; with `confirmed=true` it runs
-/// `ops::firmware_update`, which sends `OtaUrl` (if a url was given) then
-/// `Upgrade 1`.
+/// `ops::firmware_update`.
+///
+/// Deviation from the old sync path: `switchkit::SmartDevice::firmware_update`
+/// returns `Result<()>`, not the raw command response `Value` the old
+/// `tasmota_core` op returned, so there is no JSON body left to render. The
+/// panel now shows a static confirmation message instead of `result_block`'s
+/// echoed response; the actual accepted/rejected outcome is still carried by
+/// `Ok`/`Err` exactly as before (an `Err` still renders as a 502 admin error).
 pub async fn firmware_update(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -246,11 +277,16 @@ pub async fn firmware_update(
         );
         return Ok(html! { (admin_result(html! {})) (modal) }.into_response());
     }
-    let (host, _name) = device_host_and_name(&state, &id).await?;
-    let addr = state.addr_for(&host).await;
+    let (host, _name, vendor) = device_host_and_name(&state, &id).await?;
+    let client = require_client(&state, &host, vendor)?;
+    let target = state.target_for(&host).await;
     let url = form.url.filter(|u| !u.is_empty());
-    let value = ops::firmware_update(&state.inner.transport, addr, url).await?;
-    Ok(html! { (admin_result(result_block(&value))) (close_modal()) }.into_response())
+    ops::firmware_update(client.as_ref(), &target, url.as_deref()).await?;
+    Ok(html! {
+        (admin_result(html! { p { "Firmware update started." } }))
+        (close_modal())
+    }
+    .into_response())
 }
 
 /// `GET /device/:id/backup` - streams the device's binary config backup
@@ -264,9 +300,10 @@ pub async fn backup(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Response, AppError> {
-    let (host, name) = device_host_and_name(&state, &id).await?;
-    let addr = state.addr_for(&host).await;
-    let bytes = ops::backup_config(&state.inner.transport, addr).await?;
+    let (host, name, vendor) = device_host_and_name(&state, &id).await?;
+    let client = require_client(&state, &host, vendor)?;
+    let target = state.target_for(&host).await;
+    let bytes = ops::backup(client.as_ref(), &target).await?;
     let safe = sanitize_filename(&name);
     let disposition = HeaderValue::from_str(&format!("attachment; filename=\"{safe}.dmp\""))
         .unwrap_or_else(|_| {

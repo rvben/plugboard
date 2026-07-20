@@ -5,13 +5,12 @@ use crate::redact::scrub_credentials;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
-    /// A `tasmota_core::Error` rendered to text. Scrubbed of `user=`/
-    /// `password=` query-string values at construction (see
-    /// `From<tasmota_core::Error>` below): `tasmota-core` builds device
-    /// request URLs with credentials in the query string, and `ureq`
-    /// attaches the full URL to transport-level errors (timeout, connection
-    /// refused, DNS), so an unscrubbed message could leak a device's
-    /// plaintext password.
+    /// A `switchkit::Error` rendered to text. Scrubbed of `user=`/`password=`
+    /// query-string values at construction (see `From<switchkit::Error>`
+    /// below): a vendor client's error variants may embed the device's
+    /// request URL, and any transport-level error (timeout, connection
+    /// refused, DNS) can carry it too, so an unscrubbed message could leak a
+    /// device's plaintext password.
     #[error("{0}")]
     Core(String),
     #[error("{0}")]
@@ -22,8 +21,8 @@ pub enum AppError {
     Internal(String),
 }
 
-impl From<tasmota_core::Error> for AppError {
-    fn from(e: tasmota_core::Error) -> Self {
+impl From<switchkit::Error> for AppError {
+    fn from(e: switchkit::Error) -> Self {
         AppError::Core(scrub_credentials(&e.to_string()))
     }
 }
@@ -33,7 +32,7 @@ impl IntoResponse for AppError {
         let (status, msg) = match &self {
             AppError::NotFound(m) => (StatusCode::NOT_FOUND, m.clone()),
             AppError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
-            // Already scrubbed at construction (`From<tasmota_core::Error>` above);
+            // Already scrubbed at construction (`From<switchkit::Error>` above);
             // scrub again here regardless, so the response body a client sees is
             // guaranteed clean even if a future `AppError::Core(...)` call site is
             // ever added that bypasses that `From` impl.

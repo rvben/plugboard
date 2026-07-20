@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use tokio::sync::{RwLock, broadcast};
 
-use tasmota_core::{Credentials, DeviceAddr, HttpTransport};
+use switchkit::{DeviceCredentials, DeviceTarget, SmartDevice, Vendor};
 
 use crate::auth::RateLimiter;
 use crate::config::Config;
@@ -22,7 +22,13 @@ pub struct Inner {
     pub config_path: PathBuf,
     pub fleet: RwLock<Fleet>,
     pub tx: broadcast::Sender<()>,
-    pub transport: HttpTransport,
+    /// Per-vendor async `switchkit::SmartDevice` client. One instance per
+    /// vendor, shared (cloned `Arc`) across every request/poll task rather
+    /// than opened per call. Held behind `dyn SmartDevice + Send + Sync` so
+    /// `AppState::client` can hand a task-movable handle to a `JoinSet`
+    /// without naming the concrete vendor type at every call site.
+    pub tasmota: Arc<dyn SmartDevice + Send + Sync>,
+    pub shelly: Arc<dyn SmartDevice + Send + Sync>,
     /// Per-IP login attempt counter for `POST /login` (Task 11). One instance
     /// for the process lifetime, shared across every request.
     pub rate_limiter: RateLimiter,
@@ -38,7 +44,8 @@ impl AppState {
         let (tx, _) = broadcast::channel(16);
         AppState {
             inner: Arc::new(Inner {
-                transport: HttpTransport::new(Duration::from_secs(5)),
+                tasmota: Arc::new(tasmota_core::HttpTransport::new(Duration::from_secs(5))),
+                shelly: Arc::new(shelly_core::ShellyClient::default()),
                 config: RwLock::new(config),
                 config_path,
                 fleet: RwLock::new(fleet),
@@ -54,19 +61,33 @@ impl AppState {
     pub fn notify(&self) {
         let _ = self.inner.tx.send(());
     }
-    /// Build a device address with credentials from the current config.
-    pub async fn addr_for(&self, host: &str) -> DeviceAddr {
+
+    /// The async client for `vendor`, cloned (a cheap `Arc` bump) so it can
+    /// move into a spawned task. `Vendor` is `#[non_exhaustive]`, so this
+    /// matches known vendors explicitly and falls back to `None` for any
+    /// future variant this app does not yet wire a client for - never a
+    /// guessed/default client for an unrecognized vendor.
+    pub fn client(&self, vendor: Vendor) -> Option<Arc<dyn SmartDevice + Send + Sync>> {
+        match vendor {
+            Vendor::Tasmota => Some(self.inner.tasmota.clone()),
+            Vendor::Shelly => Some(self.inner.shelly.clone()),
+            _ => None,
+        }
+    }
+
+    /// Build a device target with credentials from the current config.
+    pub async fn target_for(&self, host: &str) -> DeviceTarget {
         let cfg = self.inner.config.read().await;
         let creds = cfg
             .devices
             .iter()
             .find(|d| d.host == host)
             .and_then(|d| d.password.clone())
-            .map(|p| Credentials {
+            .map(|p| DeviceCredentials {
                 user: "admin".into(),
                 password: p,
             });
-        DeviceAddr::new(host.to_string()).with_credentials(creds)
+        DeviceTarget::new(host.to_string()).with_credentials(creds)
     }
 
     /// Persist the current config off the async runtime (no blocking fs on a worker,

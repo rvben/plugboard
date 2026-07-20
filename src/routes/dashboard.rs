@@ -3,7 +3,7 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use maud::{Markup, html};
 use serde::Deserialize;
-use tasmota_core::ops::PowerAction;
+use switchkit::{PowerAction, Vendor};
 
 use crate::auth::Csrf;
 use crate::error::AppError;
@@ -36,12 +36,12 @@ pub async fn toggle(
     Path(id): Path<String>,
     Form(form): Form<ToggleForm>,
 ) -> Result<axum::response::Response, AppError> {
-    let (host, protected) = {
+    let (host, protected, vendor) = {
         let fleet = state.inner.fleet.read().await;
         let dev = fleet
             .get(&id)
             .ok_or_else(|| AppError::NotFound(id.clone()))?;
-        (dev.host.clone(), dev.protected)
+        (dev.host.clone(), dev.protected, dev.vendor)
     };
     let confirmed = form.confirmed.as_deref() == Some("true");
     // Protected devices execute ONLY with confirmed=true. The modal posts back to this
@@ -62,21 +62,18 @@ pub async fn toggle(
         );
         return Ok(html! { (device_card(dev)) (modal) }.into_response());
     }
-    let addr = state.addr_for(&host).await;
-    let relay = ops::set_power(
-        &state.inner.transport,
-        addr.clone(),
-        None,
-        PowerAction::Toggle,
-    )
-    .await?;
+    let client = state
+        .client(vendor)
+        .ok_or_else(|| AppError::Internal(format!("no client configured for {host}'s vendor")))?;
+    let target = state.target_for(&host).await;
+    let relay = ops::set_power(client.as_ref(), &target, None, PowerAction::Toggle).await?;
     // Refresh full status so the card reflects the new relay plus fresh energy/RSSI.
     // The follow-up read decides reachability EXACTLY like the poller: a control action
     // never fabricates reachability, so a FAILED refresh renders the card offline / n/a
     // (reachable=false, status=None, error set), never a stale or half-confirmed reading.
     // The command's confirmed relay is surfaced in the undo toast (below) and the next
     // successful poll restores the live card.
-    let refreshed = ops::get_status(&state.inner.transport, addr).await;
+    let refreshed = ops::get_status(client.as_ref(), &target).await;
     {
         let mut fleet = state.inner.fleet.write().await;
         if let Some(dev) = fleet.get_mut(&id) {
@@ -146,28 +143,39 @@ pub async fn bulk_power(
         return Ok(html! { (dashboard::grid(&fleet)) (modal) }.into_response());
     }
 
-    // Snapshot (id, host) without holding the fleet lock across device I/O, exactly
-    // like `poller::refresh_once`.
-    let targets: Vec<(String, String)> = {
+    // Snapshot (id, host, vendor) without holding the fleet lock across device
+    // I/O, exactly like `poller::refresh_once`.
+    let targets: Vec<(String, String, Vendor)> = {
         let fleet = state.inner.fleet.read().await;
         fleet
             .devices
             .iter()
-            .map(|d| (d.id.clone(), d.host.clone()))
+            .map(|d| (d.id.clone(), d.host.clone(), d.vendor))
             .collect()
     };
 
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(poller::MAX_CONCURRENT));
     let mut set = tokio::task::JoinSet::new();
-    for (id, host) in &targets {
+    for (id, host, vendor) in &targets {
         let id = id.clone();
         let host = host.clone();
+        let vendor = *vendor;
         let state = state.clone();
         let sem = sem.clone();
         set.spawn(async move {
             let _permit = sem.acquire_owned().await.expect("semaphore open");
-            let addr = state.addr_for(&host).await;
-            let result = ops::set_power(&state.inner.transport, addr, None, action).await;
+            let result = match state.client(vendor) {
+                Some(client) => {
+                    let target = state.target_for(&host).await;
+                    ops::set_power(client.as_ref(), &target, None, action).await
+                }
+                // No client wired up for this vendor: count it exactly like any
+                // other command failure below, never a panic or a silent skip.
+                None => Err(switchkit::Error::Unsupported {
+                    host: host.clone(),
+                    message: "no client configured for this device's vendor".into(),
+                }),
+            };
             (id, result)
         });
     }

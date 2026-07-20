@@ -1,88 +1,68 @@
-//! Async wrappers around the blocking `tasmota-core` device operations.
+//! Thin async passthroughs to a vendor's `switchkit::SmartDevice` client.
 //!
-//! `HttpTransport` is a synchronous (`ureq`-backed) client, so every call here
-//! runs the blocking `tasmota_core::ops` function inside `spawn_blocking` to keep
-//! device I/O off the async runtime's worker threads.
+//! Every `switchkit` client is already async (no blocking transport, no
+//! `spawn_blocking` needed here), so each wrapper below is just a named,
+//! app-level call site for the corresponding trait method - kept as free
+//! functions (rather than calling the trait directly from routes) so a
+//! future cross-cutting concern (logging, metrics, retries) has one place to
+//! land per operation.
 
 use serde_json::Value;
-use tasmota_core::ops::PowerAction;
-use tasmota_core::{DeviceAddr, DeviceStatus, HttpTransport, Relay, Result};
+use switchkit::{DeviceSnapshot, DeviceTarget, PowerAction, Relay, Result, SmartDevice};
 
-pub async fn get_status(t: &HttpTransport, addr: DeviceAddr) -> Result<DeviceStatus> {
-    let t = t.clone();
-    tokio::task::spawn_blocking(move || tasmota_core::ops::get_status(&t, &addr))
-        .await
-        .expect("blocking task")
+pub async fn get_status(client: &dyn SmartDevice, target: &DeviceTarget) -> Result<DeviceSnapshot> {
+    client.status(target).await
 }
 
 pub async fn set_power(
-    t: &HttpTransport,
-    addr: DeviceAddr,
-    relay: Option<u8>,
+    client: &dyn SmartDevice,
+    target: &DeviceTarget,
+    channel: Option<u8>,
     action: PowerAction,
 ) -> Result<Relay> {
-    let t = t.clone();
-    tokio::task::spawn_blocking(move || tasmota_core::ops::set_power(&t, &addr, relay, action))
-        .await
-        .expect("blocking task")
+    client.set_power(target, channel, action).await
 }
 
-pub async fn firmware_version(t: &HttpTransport, addr: DeviceAddr) -> Result<String> {
-    let t = t.clone();
-    tokio::task::spawn_blocking(move || tasmota_core::ops::firmware_version(&t, &addr))
-        .await
-        .expect("blocking task")
+pub async fn firmware_version(
+    client: &dyn SmartDevice,
+    target: &DeviceTarget,
+) -> Result<Option<String>> {
+    client.firmware_version(target).await
 }
 
 pub async fn firmware_update(
-    t: &HttpTransport,
-    addr: DeviceAddr,
-    ota_url: Option<String>,
-) -> Result<Value> {
-    let t = t.clone();
-    tokio::task::spawn_blocking(move || {
-        tasmota_core::ops::firmware_update(&t, &addr, ota_url.as_deref())
-    })
-    .await
-    .expect("blocking task")
+    client: &dyn SmartDevice,
+    target: &DeviceTarget,
+    ota_url: Option<&str>,
+) -> Result<()> {
+    client.firmware_update(target, ota_url).await
 }
 
-pub async fn config_get(t: &HttpTransport, addr: DeviceAddr, setting: String) -> Result<Value> {
-    let t = t.clone();
-    tokio::task::spawn_blocking(move || tasmota_core::ops::config_get(&t, &addr, &setting))
-        .await
-        .expect("blocking task")
+pub async fn config_get(
+    client: &dyn SmartDevice,
+    target: &DeviceTarget,
+    setting: &str,
+) -> Result<Value> {
+    client.config_get(target, setting).await
 }
 
 pub async fn config_set(
-    t: &HttpTransport,
-    addr: DeviceAddr,
-    setting: String,
-    value: String,
+    client: &dyn SmartDevice,
+    target: &DeviceTarget,
+    setting: &str,
+    value: &str,
 ) -> Result<Value> {
-    let t = t.clone();
-    tokio::task::spawn_blocking(move || tasmota_core::ops::config_set(&t, &addr, &setting, &value))
-        .await
-        .expect("blocking task")
+    client.config_set(target, setting, value).await
 }
 
-pub async fn console(t: &HttpTransport, addr: DeviceAddr, command: String) -> Result<Value> {
-    let t = t.clone();
-    tokio::task::spawn_blocking(move || tasmota_core::ops::console(&t, &addr, &command))
-        .await
-        .expect("blocking task")
+pub async fn console(
+    client: &dyn SmartDevice,
+    target: &DeviceTarget,
+    command: &str,
+) -> Result<Value> {
+    client.console(target, command).await
 }
 
-pub async fn template_get(t: &HttpTransport, addr: DeviceAddr) -> Result<Value> {
-    let t = t.clone();
-    tokio::task::spawn_blocking(move || tasmota_core::ops::template_get(&t, &addr))
-        .await
-        .expect("blocking task")
-}
-
-pub async fn backup_config(t: &HttpTransport, addr: DeviceAddr) -> Result<Vec<u8>> {
-    let t = t.clone();
-    tokio::task::spawn_blocking(move || tasmota_core::ops::backup_config(&t, &addr))
-        .await
-        .expect("blocking task")
+pub async fn backup(client: &dyn SmartDevice, target: &DeviceTarget) -> Result<Vec<u8>> {
+    client.backup(target).await
 }

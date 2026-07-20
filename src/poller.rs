@@ -3,6 +3,8 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use switchkit::{DeviceSnapshot, Vendor};
+
 use crate::fleet::Fleet;
 use crate::metrics;
 use crate::ops;
@@ -29,30 +31,43 @@ pub fn spawn_poller(state: AppState) {
 /// Refresh every device's status once, concurrently (bounded), then apply the
 /// results to the fleet and notify subscribers.
 ///
-/// The fleet write lock is never held across device I/O: the (id, host) list is
-/// snapshotted first, all polling happens without holding any fleet lock, and the
-/// write lock is taken only briefly at the end to apply the collected results.
+/// The fleet write lock is never held across device I/O: the (id, host, vendor)
+/// list is snapshotted first, all polling happens without holding any fleet
+/// lock, and the write lock is taken only briefly at the end to apply the
+/// collected results.
 pub async fn refresh_once(state: &AppState) {
-    let targets: Vec<(String, String)> = {
+    let targets: Vec<(String, String, Vendor)> = {
         let fleet = state.inner.fleet.read().await;
         fleet
             .devices
             .iter()
-            .map(|d| (d.id.clone(), d.host.clone()))
+            .map(|d| (d.id.clone(), d.host.clone(), d.vendor))
             .collect()
     };
 
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT));
     let mut set = tokio::task::JoinSet::new();
-    for (id, host) in &targets {
+    for (id, host, vendor) in &targets {
         let id = id.clone();
         let host = host.clone();
+        let vendor = *vendor;
         let state = state.clone();
         let sem = sem.clone();
         set.spawn(async move {
             let _permit = sem.acquire_owned().await.expect("semaphore open");
-            let addr = state.addr_for(&host).await;
-            let result = ops::get_status(&state.inner.transport, addr).await;
+            let result = match state.client(vendor) {
+                Some(client) => {
+                    let target = state.target_for(&host).await;
+                    ops::get_status(client.as_ref(), &target).await
+                }
+                // No client is wired up for this vendor: treat exactly like any
+                // other unreachable device (offline, scrubbed error), never a
+                // panic or a silently-skipped poll.
+                None => Err(switchkit::Error::Unsupported {
+                    host: host.clone(),
+                    message: "no client configured for this device's vendor".into(),
+                }),
+            };
             (id, result)
         });
     }
@@ -101,8 +116,8 @@ pub async fn refresh_once(state: &AppState) {
 /// lock) and performs no I/O, so it is trivially unit-testable.
 fn apply_results(
     fleet: &mut Fleet,
-    targets: &[(String, String)],
-    updates: Vec<(String, tasmota_core::Result<tasmota_core::DeviceStatus>)>,
+    targets: &[(String, String, Vendor)],
+    updates: Vec<(String, switchkit::Result<DeviceSnapshot>)>,
 ) {
     let mut updated_ids = std::collections::HashSet::with_capacity(updates.len());
     for (id, result) in updates {
@@ -128,7 +143,7 @@ fn apply_results(
         }
     }
 
-    for (id, _host) in targets {
+    for (id, _host, _vendor) in targets {
         if updated_ids.contains(id) {
             continue;
         }
@@ -142,31 +157,25 @@ fn apply_results(
 
 #[cfg(test)]
 mod tests {
-    use tasmota_core::{DeviceStatus, Energy, NetInfo};
+    use switchkit::{DeviceSnapshot, Energy, Signal, Vendor};
 
     use super::apply_results;
     use crate::fleet::{DeviceView, Fleet};
 
-    fn sample_status() -> DeviceStatus {
-        DeviceStatus {
+    fn sample_status() -> DeviceSnapshot {
+        DeviceSnapshot {
             host: "192.0.2.20".into(),
             name: Some("Plug".into()),
-            friendly_names: vec!["Plug".into()],
-            module: Some(1),
-            relays: Vec::new(),
-            firmware: Some("14.2.0".into()),
-            net: NetInfo::default(),
-            uptime: Some("1T00:00:00".into()),
-            wifi_rssi: Some(-50),
             energy: Some(Energy {
                 power_w: Some(42.0),
+                today_kwh: Some(1.5),
+                total_kwh: None,
                 voltage_v: None,
                 current_a: None,
-                today_kwh: Some(1.5),
-                yesterday_kwh: None,
-                total_kwh: None,
             }),
-            mqtt: None,
+            signal: Some(Signal::from_quality_percent(50)),
+            uptime: Some("1T00:00:00".into()),
+            ..Default::default()
         }
     }
 
@@ -176,6 +185,7 @@ mod tests {
             name: "Plug".into(),
             host: host.into(),
             protected: false,
+            vendor: Vendor::Tasmota,
             reachable: true,
             status: Some(sample_status()),
             error: None,
@@ -198,8 +208,8 @@ mod tests {
             ],
         };
         let targets = vec![
-            ("d-1".to_string(), "192.0.2.10".to_string()),
-            ("d-2".to_string(), "192.0.2.20".to_string()),
+            ("d-1".to_string(), "192.0.2.10".to_string(), Vendor::Tasmota),
+            ("d-2".to_string(), "192.0.2.20".to_string(), Vendor::Tasmota),
         ];
         // Only "d-1" produced a result; "d-2"'s task is presumed panicked/lost.
         let updates = vec![("d-1".to_string(), Ok(sample_status()))];

@@ -1,4 +1,4 @@
-use tasmota_core::DeviceStatus;
+use switchkit::{DeviceSnapshot, Vendor};
 
 use crate::config::DeviceConfig;
 
@@ -19,6 +19,11 @@ pub struct DeviceView {
     pub name: String,
     pub host: String,
     pub protected: bool,
+    /// Which vendor's `switchkit::SmartDevice` client serves this device.
+    /// Every device defaults to `Vendor::Tasmota` for now (the fleet is
+    /// effectively Tasmota-only until config carries a real `vendor` field);
+    /// `AppState::client` dispatches on this to pick the right async client.
+    pub vendor: Vendor,
     /// Whether the last STATUS read (a poll, or a control action's follow-up refresh)
     /// succeeded. This is the single source of truth for "online" AND for whether any
     /// live value may be rendered. A failed read makes the device offline; nothing
@@ -28,7 +33,7 @@ pub struct DeviceView {
     /// whenever a read fails, so neither energy/RSSI nor the relay badge are ever
     /// rendered stale-as-live. The relay is read from `status.relays`; there is
     /// deliberately no separate carried-over relay field.
-    pub status: Option<DeviceStatus>,
+    pub status: Option<DeviceSnapshot>,
     pub error: Option<String>,
 }
 
@@ -39,6 +44,7 @@ impl DeviceView {
             name: c.name.clone(),
             host: c.host.clone(),
             protected: c.protected,
+            vendor: Vendor::Tasmota,
             reachable: false, // unknown until first poll/command
             status: None,
             error: None,
@@ -70,11 +76,18 @@ impl DeviceView {
             .and_then(|s| s.energy.as_ref())
             .and_then(|e| e.today_kwh)
     }
+    /// Wi-Fi signal quality as a 0-100 percentage (Tasmota's native unit).
+    /// `None` while offline/unknown or when the device's signal reading has
+    /// no quality-percent form (e.g. a dBm-only vendor).
     pub fn rssi(&self) -> Option<i64> {
         if !self.reachable {
             return None;
         }
-        self.status.as_ref().and_then(|s| s.wifi_rssi)
+        self.status
+            .as_ref()
+            .and_then(|s| s.signal.as_ref())
+            .and_then(|sig| sig.quality_percent)
+            .map(i64::from)
     }
     pub fn is_online(&self) -> bool {
         self.reachable
@@ -102,32 +115,26 @@ impl Fleet {
 
 #[cfg(test)]
 mod tests {
-    use tasmota_core::{DeviceStatus, Energy, NetInfo};
+    use switchkit::{DeviceSnapshot, Energy, Signal, Vendor};
 
     use super::DeviceView;
 
     /// A fully-populated status: energy + RSSI present, as a real device would
     /// report right before going offline.
-    fn sample_status() -> DeviceStatus {
-        DeviceStatus {
+    fn sample_status() -> DeviceSnapshot {
+        DeviceSnapshot {
             host: "192.0.2.20".into(),
             name: Some("Plug".into()),
-            friendly_names: vec!["Plug".into()],
-            module: Some(1),
-            relays: Vec::new(),
-            firmware: Some("14.2.0".into()),
-            net: NetInfo::default(),
-            uptime: Some("1T00:00:00".into()),
-            wifi_rssi: Some(-50),
             energy: Some(Energy {
                 power_w: Some(42.0),
+                today_kwh: Some(1.5),
+                total_kwh: None,
                 voltage_v: None,
                 current_a: None,
-                today_kwh: Some(1.5),
-                yesterday_kwh: None,
-                total_kwh: None,
             }),
-            mqtt: None,
+            signal: Some(Signal::from_quality_percent(50)),
+            uptime: Some("1T00:00:00".into()),
+            ..Default::default()
         }
     }
 
@@ -137,6 +144,7 @@ mod tests {
             name: "Plug".into(),
             host: "192.0.2.20".into(),
             protected: false,
+            vendor: Vendor::Tasmota,
             reachable,
             status: Some(sample_status()),
             error: None,
@@ -159,7 +167,7 @@ mod tests {
         let dev = view_with(true);
         assert_eq!(dev.power_w(), Some(42.0));
         assert_eq!(dev.today_kwh(), Some(1.5));
-        assert_eq!(dev.rssi(), Some(-50));
+        assert_eq!(dev.rssi(), Some(50));
     }
 
     #[test]

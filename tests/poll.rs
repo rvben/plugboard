@@ -56,7 +56,10 @@ async fn refresh_once_marks_device_reachable_with_status() {
     assert!(dev.reachable, "device should be marked reachable");
     assert!(dev.error.is_none(), "no error expected on success");
     let status = dev.status.as_ref().expect("status should be populated");
-    assert_eq!(status.firmware.as_deref(), Some("14.2.0"));
+    assert_eq!(
+        status.firmware.as_ref().and_then(|f| f.version.as_deref()),
+        Some("14.2.0")
+    );
 }
 
 #[tokio::test]

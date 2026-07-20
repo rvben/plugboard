@@ -1,9 +1,9 @@
 use std::fmt::Display;
 
 use maud::{Markup, html};
+use switchkit::RelayState;
 
 use crate::fleet::DeviceView;
-use tasmota_core::RelayState;
 
 /// Render `Some(v)` as-is, `None` as a muted "n/a" span. Never coerces an
 /// absent value to `0` or an empty string.

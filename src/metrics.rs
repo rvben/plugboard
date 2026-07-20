@@ -20,7 +20,7 @@ use std::sync::{Mutex, PoisonError};
 use axum::extract::State;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
-use tasmota_core::RelayState;
+use switchkit::{DeviceSnapshot, RelayState, Vendor};
 
 use crate::fleet::{DeviceView, Fleet};
 use crate::state::AppState;
@@ -129,8 +129,8 @@ fn relay_states(dev: &DeviceView) -> Vec<(u8, u8)> {
 /// without any device I/O.
 pub fn record_poll_outcomes(
     metrics_state: &MetricsState,
-    targets: &[(String, String)],
-    updates: &[(String, tasmota_core::Result<tasmota_core::DeviceStatus>)],
+    targets: &[(String, String, Vendor)],
+    updates: &[(String, switchkit::Result<DeviceSnapshot>)],
     now_unix: Option<u64>,
 ) {
     let mut metrics = metrics_state.lock().unwrap_or_else(PoisonError::into_inner);
@@ -147,7 +147,7 @@ pub fn record_poll_outcomes(
             entry.poll_error += 1;
         }
     }
-    for (id, _host) in targets {
+    for (id, _host, _vendor) in targets {
         if seen.contains(id.as_str()) {
             continue;
         }
@@ -155,7 +155,7 @@ pub fn record_poll_outcomes(
     }
 
     let current_ids: std::collections::HashSet<&str> =
-        targets.iter().map(|(id, _)| id.as_str()).collect();
+        targets.iter().map(|(id, _, _)| id.as_str()).collect();
     metrics.retain(|id, _| current_ids.contains(id.as_str()));
 }
 
@@ -350,7 +350,7 @@ pub async fn handler(State(state): State<AppState>) -> Response {
 
 #[cfg(test)]
 mod tests {
-    use tasmota_core::{DeviceStatus, Energy, NetInfo, Relay, RelayState};
+    use switchkit::{Energy, Relay, RelayState, Signal};
 
     use super::*;
     use crate::fleet::DeviceView;
@@ -361,24 +361,23 @@ mod tests {
             voltage_v: None,
             current_a: None,
             today_kwh,
-            yesterday_kwh: None,
             total_kwh,
         }
     }
 
-    fn status(energy: Option<Energy>, wifi_rssi: Option<i64>, relays: Vec<Relay>) -> DeviceStatus {
-        DeviceStatus {
+    fn status(
+        energy: Option<Energy>,
+        signal_percent: Option<i64>,
+        relays: Vec<Relay>,
+    ) -> DeviceSnapshot {
+        DeviceSnapshot {
             host: "192.0.2.1".into(),
             name: Some("Plug".into()),
-            friendly_names: vec!["Plug".into()],
-            module: Some(1),
             relays,
-            firmware: Some("14.2.0".into()),
-            net: NetInfo::default(),
-            uptime: Some("1T00:00:00".into()),
-            wifi_rssi,
             energy,
-            mqtt: None,
+            signal: signal_percent.map(Signal::from_quality_percent),
+            uptime: Some("1T00:00:00".into()),
+            ..Default::default()
         }
     }
 
@@ -387,13 +386,14 @@ mod tests {
         host: &str,
         name: &str,
         reachable: bool,
-        status: Option<DeviceStatus>,
+        status: Option<DeviceSnapshot>,
     ) -> DeviceView {
         DeviceView {
             id: id.into(),
             name: name.into(),
             host: host.into(),
             protected: false,
+            vendor: Vendor::Tasmota,
             reachable,
             status,
             error: None,
@@ -614,16 +614,17 @@ mod tests {
     fn record_poll_outcomes_counts_success_and_error_and_render_reflects_them() {
         let metrics_state: MetricsState = Mutex::new(HashMap::new());
         let targets = vec![
-            ("d-1".to_string(), "192.0.2.20".to_string()),
-            ("d-2".to_string(), "192.0.2.21".to_string()),
+            ("d-1".to_string(), "192.0.2.20".to_string(), Vendor::Tasmota),
+            ("d-2".to_string(), "192.0.2.21".to_string(), Vendor::Tasmota),
         ];
 
         // Tick 1: d-1 succeeds, d-2 errors.
-        let updates: Vec<(String, tasmota_core::Result<DeviceStatus>)> = vec![
+        let updates: Vec<(String, switchkit::Result<DeviceSnapshot>)> = vec![
             ("d-1".to_string(), Ok(status(None, None, Vec::new()))),
             (
                 "d-2".to_string(),
-                Err(tasmota_core::Error::Network {
+                Err(switchkit::Error::Network {
+                    host: "192.0.2.21".into(),
                     message: "connection refused".into(),
                 }),
             ),
@@ -632,7 +633,7 @@ mod tests {
 
         // Tick 2: d-1 succeeds again; d-2's poll task is presumed lost (absent
         // from `updates` entirely, not merely an `Err`).
-        let updates2: Vec<(String, tasmota_core::Result<DeviceStatus>)> =
+        let updates2: Vec<(String, switchkit::Result<DeviceSnapshot>)> =
             vec![("d-1".to_string(), Ok(status(None, None, Vec::new())))];
         record_poll_outcomes(&metrics_state, &targets, &updates2, Some(2_000));
 
@@ -682,8 +683,8 @@ mod tests {
     #[test]
     fn render_drops_counters_for_devices_no_longer_in_the_fleet() {
         let metrics_state: MetricsState = Mutex::new(HashMap::new());
-        let targets = vec![("d-1".to_string(), "192.0.2.22".to_string())];
-        let updates: Vec<(String, tasmota_core::Result<DeviceStatus>)> =
+        let targets = vec![("d-1".to_string(), "192.0.2.22".to_string(), Vendor::Tasmota)];
+        let updates: Vec<(String, switchkit::Result<DeviceSnapshot>)> =
             vec![("d-1".to_string(), Ok(status(None, None, Vec::new())))];
         record_poll_outcomes(&metrics_state, &targets, &updates, Some(1_000));
 
@@ -718,8 +719,8 @@ mod tests {
             );
         }
 
-        let targets = vec![("d-1".to_string(), "192.0.2.40".to_string())];
-        let updates: Vec<(String, tasmota_core::Result<DeviceStatus>)> =
+        let targets = vec![("d-1".to_string(), "192.0.2.40".to_string(), Vendor::Tasmota)];
+        let updates: Vec<(String, switchkit::Result<DeviceSnapshot>)> =
             vec![("d-1".to_string(), Ok(status(None, None, Vec::new())))];
         record_poll_outcomes(&metrics_state, &targets, &updates, Some(1_000));
 
