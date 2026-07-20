@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use httpmock::prelude::*;
 use serde_json::json;
 
+use plugboard::config::{Config, DeviceConfig};
+use plugboard::poller::refresh_once;
+use plugboard::state::AppState;
 use switchkit::Vendor;
-use tasmota_web::config::{Config, DeviceConfig};
-use tasmota_web::poller::refresh_once;
-use tasmota_web::state::AppState;
 
 fn mock_status(server: &MockServer) {
     server.mock(|when, then| {

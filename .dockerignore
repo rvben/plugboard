@@ -5,4 +5,4 @@
 docs
 *.md
 screenshots
-tasmota-web.toml
+plugboard.toml

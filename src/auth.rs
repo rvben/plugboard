@@ -226,7 +226,7 @@ impl Default for RateLimiter {
 
 /// Hashes `password` with argon2 using a fresh random salt, returning a PHC
 /// string suitable for `AuthConfig::password_hash`. Used by both the
-/// `tasmota-web hash-password` subcommand and (indirectly, via that
+/// `plugboard hash-password` subcommand and (indirectly, via that
 /// subcommand's output) the config file an operator hand-writes.
 pub fn hash_password(password: &str) -> String {
     use argon2::Argon2;

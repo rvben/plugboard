@@ -1,23 +1,23 @@
 [package]
-name = "tasmota-web"
+name = "plugboard"
 version = "0.1.2"
 edition = "2024"
 rust-version = "1.90"
-description = "Unofficial web dashboard and admin for Tasmota smart devices."
+description = "Unofficial web dashboard and admin for Tasmota and Shelly smart devices."
 authors = ["Ruben J. Jongejan <ruben.jongejan@gmail.com>"]
 license = "MIT"
-repository = "https://github.com/rvben/tasmota-web"
-homepage = "https://github.com/rvben/tasmota-web"
-keywords = ["tasmota", "smart-home", "iot", "dashboard", "web"]
+repository = "https://github.com/rvben/plugboard"
+homepage = "https://github.com/rvben/plugboard"
+keywords = ["shelly", "tasmota", "smart-home", "iot", "dashboard"]
 categories = ["web-programming"]
 readme = "README.md"
 
 [lib]
-name = "tasmota_web"
+name = "plugboard"
 path = "src/lib.rs"
 
 [[bin]]
-name = "tasmota-web"
+name = "plugboard"
 path = "src/main.rs"
 
 [dependencies]

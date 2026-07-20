@@ -6,13 +6,13 @@ use std::path::PathBuf;
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
+use plugboard::config::{Config, DeviceConfig};
+use plugboard::fleet::device_id;
+use plugboard::routes;
+use plugboard::state::AppState;
 use switchkit::{
     Capabilities, DeviceSnapshot, Energy, Firmware, NetInfo, Relay, RelayState, Signal, Vendor,
 };
-use tasmota_web::config::{Config, DeviceConfig};
-use tasmota_web::fleet::device_id;
-use tasmota_web::routes;
-use tasmota_web::state::AppState;
 
 /// A status with no `energy` block at all: the device has no energy sensor,
 /// which must render as "n/a", never as "0 W".

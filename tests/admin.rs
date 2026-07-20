@@ -15,12 +15,12 @@ use httpmock::prelude::*;
 use serde_json::json;
 use tower::ServiceExt;
 
+use plugboard::config::{Config, DeviceConfig};
+use plugboard::fleet::device_id;
+use plugboard::routes;
+use plugboard::routes::admin::sanitize_filename;
+use plugboard::state::AppState;
 use switchkit::{Capabilities, DeviceSnapshot, Vendor};
-use tasmota_web::config::{Config, DeviceConfig};
-use tasmota_web::fleet::device_id;
-use tasmota_web::routes;
-use tasmota_web::routes::admin::sanitize_filename;
-use tasmota_web::state::AppState;
 
 fn config_with(host: &str, name: &str) -> Config {
     config_with_vendor(host, name, Vendor::Tasmota)

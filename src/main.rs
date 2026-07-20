@@ -3,21 +3,21 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use tasmota_web::auth::hash_password;
-use tasmota_web::config::{AuthMode, Config};
-use tasmota_web::poller::spawn_poller;
-use tasmota_web::routes;
-use tasmota_web::state::AppState;
+use plugboard::auth::hash_password;
+use plugboard::config::{AuthMode, Config};
+use plugboard::poller::spawn_poller;
+use plugboard::routes;
+use plugboard::state::AppState;
 
 #[derive(Parser)]
 #[command(
-    name = "tasmota-web",
+    name = "plugboard",
     version,
-    about = "Web dashboard for Tasmota devices."
+    about = "Web dashboard for Tasmota and Shelly devices."
 )]
 struct Args {
     /// Path to the config TOML.
-    #[arg(long, default_value = "tasmota-web.toml")]
+    #[arg(long, default_value = "plugboard.toml")]
     config: PathBuf,
 
     #[command(subcommand)]
@@ -49,7 +49,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tracing_subscriber::fmt()
-        .with_env_filter("tasmota_web=info")
+        .with_env_filter("plugboard=info")
         .init();
     let cfg = Config::load(&args.config)?;
     let bind = cfg.bind;
@@ -76,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
 
 /// Reads a single line from stdin as the password to hash. Not hidden
 /// (no added dependency for that); pipe the password in if terminal echo is
-/// a concern, e.g. `printf '%s' "$PW" | tasmota-web hash-password`.
+/// a concern, e.g. `printf '%s' "$PW" | plugboard hash-password`.
 fn read_password_from_stdin() -> anyhow::Result<String> {
     print!("Password: ");
     io::stdout().flush()?;

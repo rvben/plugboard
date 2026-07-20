@@ -11,7 +11,7 @@ use axum::{Router, middleware};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use tasmota_web::auth::{Csrf, csrf_and_origin, session_layer};
+use plugboard::auth::{Csrf, csrf_and_origin, session_layer};
 
 async fn probe_get(csrf: Csrf) -> String {
     csrf.0

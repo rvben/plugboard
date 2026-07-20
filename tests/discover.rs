@@ -24,11 +24,11 @@ use httpmock::prelude::*;
 use serde_json::json;
 use tower::ServiceExt;
 
+use plugboard::config::Config;
+use plugboard::routes;
+use plugboard::state::AppState;
+use plugboard::views::discover;
 use switchkit::Vendor;
-use tasmota_web::config::Config;
-use tasmota_web::routes;
-use tasmota_web::state::AppState;
-use tasmota_web::views::discover;
 
 /// Mocks a Tasmota `Status 0` probe response (same shape as
 /// `tests/control.rs::mock_status`), enough for `tasmota_core::HttpTransport`'s
@@ -143,7 +143,7 @@ fn test_app() -> Router {
 /// from colliding on the same file.
 fn temp_config_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
-        "tasmota-web-test-discover-{name}-{}.toml",
+        "plugboard-test-discover-{name}-{}.toml",
         std::process::id()
     ))
 }
@@ -425,7 +425,7 @@ async fn add_rolls_back_on_save_failure_without_ghosting() {
     let host = server.address().to_string();
 
     let blocker = std::env::temp_dir().join(format!(
-        "tasmota-web-test-discover-blocker-{}.tmp",
+        "plugboard-test-discover-blocker-{}.tmp",
         std::process::id()
     ));
     std::fs::write(&blocker, b"not a directory").expect("write blocker file");

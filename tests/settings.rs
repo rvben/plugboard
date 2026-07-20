@@ -14,12 +14,12 @@ use axum::http::{Request, Response, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
+use plugboard::auth::hash_password;
+use plugboard::config::{AuthConfig, AuthMode, Config, DeviceConfig};
+use plugboard::fleet::device_id;
+use plugboard::routes;
+use plugboard::state::AppState;
 use switchkit::Vendor;
-use tasmota_web::auth::hash_password;
-use tasmota_web::config::{AuthConfig, AuthMode, Config, DeviceConfig};
-use tasmota_web::fleet::device_id;
-use tasmota_web::routes;
-use tasmota_web::state::AppState;
 
 /// RFC 5737 TEST-NET-3 address used as the fake client IP for tests that
 /// exercise `POST /login` (its per-IP rate limiter needs a `ConnectInfo`,
@@ -160,7 +160,7 @@ async fn get_route(app: &Router, cookie: &str, path: &str) -> Response<Body> {
 /// the repo. `name` keeps concurrently-run tests from colliding.
 fn temp_config_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
-        "tasmota-web-test-settings-{name}-{}.toml",
+        "plugboard-test-settings-{name}-{}.toml",
         std::process::id()
     ))
 }
@@ -355,7 +355,7 @@ async fn remove_drops_device_from_config_and_fleet() {
 #[tokio::test]
 async fn remove_rolls_back_on_save_failure() {
     let blocker = std::env::temp_dir().join(format!(
-        "tasmota-web-test-settings-blocker-{}.tmp",
+        "plugboard-test-settings-blocker-{}.tmp",
         std::process::id()
     ));
     std::fs::write(&blocker, b"not a directory").expect("write blocker file");

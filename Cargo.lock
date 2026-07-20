@@ -1534,6 +1534,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "plugboard"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "async-stream",
+ "async-trait",
+ "axum",
+ "clap",
+ "futures",
+ "http-body-util",
+ "httpmock",
+ "maud",
+ "rand 0.8.7",
+ "serde",
+ "serde_json",
+ "shelly-core",
+ "switchkit",
+ "tasmota-core",
+ "thiserror 2.0.19",
+ "tokio",
+ "toml",
+ "tower",
+ "tower-http",
+ "tower-sessions",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "polling"
 version = "3.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2197,36 +2227,6 @@ dependencies = [
  "serde_json",
  "switchkit",
  "thiserror 2.0.19",
-]
-
-[[package]]
-name = "tasmota-web"
-version = "0.1.2"
-dependencies = [
- "anyhow",
- "argon2",
- "async-stream",
- "async-trait",
- "axum",
- "clap",
- "futures",
- "http-body-util",
- "httpmock",
- "maud",
- "rand 0.8.7",
- "serde",
- "serde_json",
- "shelly-core",
- "switchkit",
- "tasmota-core",
- "thiserror 2.0.19",
- "tokio",
- "toml",
- "tower",
- "tower-http",
- "tower-sessions",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

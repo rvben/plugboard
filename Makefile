@@ -20,14 +20,14 @@ check: lint test
 
 # Score the binary against The CLI Spec (clispec.dev). Requires `clispec`.
 conformance: release
-	clispec score ./target/release/tasmota-web
+	clispec score ./target/release/plugboard
 
 clean:
 	cargo clean
 
 install: release
 	mkdir -p ~/.local/bin
-	cp target/release/tasmota-web ~/.local/bin/tasmota-web
+	cp target/release/plugboard ~/.local/bin/plugboard
 
 update-deps:
 	upd --apply --max-bump minor --lang rust,actions

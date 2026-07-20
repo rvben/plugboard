@@ -1,7 +1,7 @@
 //! Serves the embedded static assets (`app.css`, `htmx.min.js`, `sse.js`).
 //!
 //! Assets are compiled INTO the binary via `include_bytes!`, not read from disk
-//! at runtime, so `tasmota-web` stays a single self-contained executable. These
+//! at runtime, so `plugboard` stays a single self-contained executable. These
 //! routes are public static files: no session/CSRF/auth is applied to them.
 
 use axum::extract::Path;

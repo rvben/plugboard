@@ -1,6 +1,6 @@
 //! Prometheus `/metrics` exporter.
 //!
-//! `tasmota-web` already polls every configured device over HTTP, so exposing
+//! `plugboard` already polls every configured device over HTTP, so exposing
 //! that data as Prometheus metrics turns it into a drop-in exporter for a
 //! mixed-vendor plug fleet, no MQTT broker and no separate exporter process
 //! needed. Every per-device series carries a `vendor` label, and each
@@ -182,7 +182,7 @@ pub fn render(fleet: &Fleet, metrics_state: &MetricsState, version: &str) -> Str
 
     let _ = writeln!(
         out,
-        "# HELP plugboard_build_info Static build information for this tasmota-web instance."
+        "# HELP plugboard_build_info Static build information for this plugboard instance."
     );
     let _ = writeln!(out, "# TYPE plugboard_build_info gauge");
     let _ = writeln!(

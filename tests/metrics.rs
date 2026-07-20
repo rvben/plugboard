@@ -11,10 +11,10 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
+use plugboard::config::{AuthMode, Config, DeviceConfig};
+use plugboard::routes;
+use plugboard::state::AppState;
 use switchkit::Vendor;
-use tasmota_web::config::{AuthMode, Config, DeviceConfig};
-use tasmota_web::routes;
-use tasmota_web::state::AppState;
 
 fn config_with_device(host: &str) -> Config {
     Config {

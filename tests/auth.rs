@@ -16,10 +16,10 @@ use axum::http::{Request, Response, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use tasmota_web::auth::{MAX_LOGIN_ATTEMPTS, hash_password};
-use tasmota_web::config::{AuthConfig, AuthMode, Config};
-use tasmota_web::routes;
-use tasmota_web::state::AppState;
+use plugboard::auth::{MAX_LOGIN_ATTEMPTS, hash_password};
+use plugboard::config::{AuthConfig, AuthMode, Config};
+use plugboard::routes;
+use plugboard::state::AppState;
 
 const USERNAME: &str = "admin";
 const PASSWORD: &str = "S3cure-Pass-2026";

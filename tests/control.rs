@@ -14,11 +14,11 @@ use httpmock::prelude::*;
 use serde_json::json;
 use tower::ServiceExt;
 
+use plugboard::config::{Config, DeviceConfig};
+use plugboard::fleet::device_id;
+use plugboard::routes;
+use plugboard::state::AppState;
 use switchkit::Vendor;
-use tasmota_web::config::{Config, DeviceConfig};
-use tasmota_web::fleet::device_id;
-use tasmota_web::routes;
-use tasmota_web::state::AppState;
 
 fn mock_power_toggle<'a>(server: &'a MockServer, new_state: &str) -> httpmock::Mock<'a> {
     server.mock(|when, then| {

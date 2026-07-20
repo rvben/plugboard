@@ -26,18 +26,18 @@ RUN touch src/main.rs src/lib.rs \
 # without needing a static/musl rebuild.
 FROM debian:bookworm-slim AS runtime
 
-RUN useradd --system --create-home --home-dir /home/tasmota-web --shell /usr/sbin/nologin tasmota-web
+RUN useradd --system --create-home --home-dir /home/plugboard --shell /usr/sbin/nologin plugboard
 
-COPY --from=builder /build/target/release/tasmota-web /usr/local/bin/tasmota-web
+COPY --from=builder /build/target/release/plugboard /usr/local/bin/plugboard
 
-USER tasmota-web
-WORKDIR /home/tasmota-web
+USER plugboard
+WORKDIR /home/plugboard
 
-# tasmota-web reads its config via --config (default ./tasmota-web.toml,
+# plugboard reads its config via --config (default ./plugboard.toml,
 # containing device hosts/credentials and auth settings). The deploying
 # compose/orchestration is expected to bind-mount a config file to
-# /etc/tasmota-web/tasmota-web.toml (read-only). Never bake real config or
+# /etc/plugboard/plugboard.toml (read-only). Never bake real config or
 # secrets into the image.
 EXPOSE 8088
-ENTRYPOINT ["/usr/local/bin/tasmota-web"]
-CMD ["--config", "/etc/tasmota-web/tasmota-web.toml"]
+ENTRYPOINT ["/usr/local/bin/plugboard"]
+CMD ["--config", "/etc/plugboard/plugboard.toml"]

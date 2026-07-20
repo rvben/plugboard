@@ -4,7 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
 
+### Changed
+
+- **BREAKING**: renamed the crate, binary, and config file from `tasmota-web`
+  (`tasmota-web.toml`) to `plugboard` (`plugboard.toml`), the multi-vendor
+  successor supporting both Tasmota and Shelly devices. Metric names moved
+  from `tasmota_web_*` to `plugboard_*` in a prior change; this rename covers
+  everything else (crate/lib/bin names, CLI name, tracing target, UI brand,
+  Docker image user/paths).
 
 ## [0.1.2](https://github.com/rvben/tasmota-web/compare/v0.1.1...v0.1.2) - 2026-07-19
 
