@@ -70,6 +70,21 @@ fn result_block(value: &Value) -> Markup {
     html! { pre.admin-output { (value.to_string()) } }
 }
 
+/// One console-log entry: the command echoed prompt-style, then the device's
+/// pretty-printed JSON response. Appended (`hx-swap="beforeend"`) into
+/// `#console-log`, so a session's command history stays visible like a
+/// terminal. Both the command and the response are device/user-influenced
+/// text and go through maud's auto-escaping, never raw.
+fn console_entry(command: &str, value: &Value) -> Markup {
+    let pretty = serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string());
+    html! {
+        div.console-entry {
+            div.console-cmd { span.console-prompt aria-hidden="true" { ">" } " " (command) }
+            pre.console-out { (pretty) }
+        }
+    }
+}
+
 /// Rejects a setting that is not a single bare command word: mirrors the
 /// CLI's `validate_setting` (see `tasmota-cli/cli/src/commands.rs`) exactly,
 /// so `config get`/`config set` refuse the same inputs the CLI refuses, now
@@ -134,7 +149,9 @@ pub struct ConsoleForm {
 /// `Destructive` or `RequiresConfirmation` result without `confirmed=true`
 /// returns a confirm modal carrying the ORIGINAL command as a hidden field
 /// and never reaches the device. `Safe` (or an already-confirmed request)
-/// executes directly.
+/// executes directly and APPENDS a command+response entry to `#console-log`
+/// (the form and the modal's confirm both use `hx-swap="beforeend"` there,
+/// so history accumulates like a terminal).
 pub async fn console(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -158,18 +175,21 @@ pub async fn console(
                 form.command
             )
         };
+        // Main content is empty (a beforeend swap of nothing appends
+        // nothing); the modal rides along as an OOB swap into #modal.
         let modal = confirm_modal(
             &title,
             &format!("/device/{id}/console"),
             &[("command", &form.command)],
-            "#admin-result",
+            "#console-log",
+            "beforeend",
         );
-        return Ok(html! { (admin_result(html! {})) (modal) }.into_response());
+        return Ok(html! { (modal) }.into_response());
     }
     let client = require_client(&state, &host, vendor)?;
     let target = state.target_for(&host).await;
     let value = ops::console(client.as_ref(), &target, &form.command).await?;
-    Ok(html! { (admin_result(result_block(&value))) (close_modal()) }.into_response())
+    Ok(html! { (console_entry(&form.command, &value)) (close_modal()) }.into_response())
 }
 
 #[derive(Deserialize)]
@@ -223,6 +243,7 @@ pub async fn config_set(
             &format!("/device/{id}/config/set"),
             &[("setting", &form.setting), ("value", &form.value)],
             "#admin-result",
+            "outerHTML",
         );
         return Ok(html! { (admin_result(html! {})) (modal) }.into_response());
     }
@@ -283,6 +304,7 @@ pub async fn firmware_update(
             &format!("/device/{id}/firmware/update"),
             &hidden,
             "#admin-result",
+            "outerHTML",
         );
         return Ok(html! { (admin_result(html! {})) (modal) }.into_response());
     }

@@ -10,6 +10,7 @@ use switchkit::{DeviceCredentials, DeviceTarget, SmartDevice, Vendor};
 use crate::auth::RateLimiter;
 use crate::config::Config;
 use crate::fleet::Fleet;
+use crate::history::HistoryState;
 use crate::metrics::MetricsState;
 
 #[derive(Clone)]
@@ -36,6 +37,9 @@ pub struct Inner {
     /// device id so a fleet rebuild (settings change) never resets them; see
     /// `crate::metrics`.
     pub metrics: MetricsState,
+    /// Recent measured-power samples per device + fleet total, one sample per
+    /// poll tick; offline ticks are gaps, never zeros. See `crate::history`.
+    pub history: HistoryState,
 }
 
 impl AppState {
@@ -52,6 +56,7 @@ impl AppState {
                 tx,
                 rate_limiter: RateLimiter::default(),
                 metrics: Mutex::new(HashMap::new()),
+                history: HistoryState::default(),
             }),
         }
     }

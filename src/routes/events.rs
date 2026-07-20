@@ -12,22 +12,27 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use futures::stream::Stream;
 use tokio::sync::broadcast::error::RecvError;
 
+use crate::history;
 use crate::state::AppState;
 use crate::views::dashboard::{device_card, fleet_summary};
 
-/// Snapshot the fleet under a short-lived read lock and render every device's
-/// card plus the fleet summary, as `(event name, html)` pairs. The lock is
-/// dropped before returning, so it is never held across an `.await` in the
-/// stream below.
+/// Snapshot the history, then the fleet (each under its own short-lived
+/// lock), and render every device's card plus the fleet summary as
+/// `(event name, html)` pairs. No lock is ever held across an `.await` in
+/// the stream below.
 async fn render_all_cards(state: &AppState) -> Vec<(String, String)> {
+    let series = history::snapshot(&state.inner.history);
     let fleet = state.inner.fleet.read().await;
-    let mut events = vec![("summary".to_string(), fleet_summary(&fleet).into_string())];
-    events.extend(
-        fleet
-            .devices
-            .iter()
-            .map(|d| (format!("device-{}", d.id), device_card(d).into_string())),
-    );
+    let mut events = vec![(
+        "summary".to_string(),
+        fleet_summary(&fleet, &series.fleet).into_string(),
+    )];
+    events.extend(fleet.devices.iter().map(|d| {
+        (
+            format!("device-{}", d.id),
+            device_card(d, series.device(&d.id)).into_string(),
+        )
+    }));
     events
 }
 

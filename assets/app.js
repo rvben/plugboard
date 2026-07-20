@@ -97,16 +97,21 @@
       }
     });
 
-    // Reveal a freshly swapped-in admin result: it lives at the bottom of
-    // the admin panel, usually below the fold of the form that produced it.
+    // Reveal a freshly swapped-in admin result (it can sit below the fold of
+    // the form that produced it), and keep the console log pinned to its
+    // newest entry like a real terminal.
     var reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     document.body.addEventListener("htmx:afterSwap", function (evt) {
       var t = evt.detail.target;
-      if (t && t.id === "admin-result" && t.firstChild) {
+      if (!t) return;
+      if (t.id === "admin-result" && t.firstChild) {
         t.scrollIntoView({
           block: "nearest",
           behavior: reducedMotion.matches ? "auto" : "smooth",
         });
+      }
+      if (t.id === "console-log") {
+        t.scrollTop = t.scrollHeight;
       }
     });
 

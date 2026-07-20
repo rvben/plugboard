@@ -7,6 +7,7 @@ use switchkit::{PowerAction, Vendor};
 
 use crate::auth::Csrf;
 use crate::error::AppError;
+use crate::history;
 use crate::ops;
 use crate::poller;
 use crate::redact::scrub_credentials;
@@ -20,12 +21,13 @@ pub async fn index(State(state): State<AppState>, csrf: Csrf) -> Markup {
         active: layout::Nav::Devices,
         show_logout: state.builtin_auth().await,
     };
+    let series = history::snapshot(&state.inner.history);
     let fleet = state.inner.fleet.read().await;
     layout::page(
         "Dashboard",
         &csrf.0,
         chrome,
-        dashboard::dashboard_page(&fleet),
+        dashboard::dashboard_page(&fleet, &series),
     )
 }
 
@@ -38,6 +40,10 @@ pub async fn modal_close() -> Markup {
 #[derive(Deserialize)]
 pub struct ToggleForm {
     confirmed: Option<String>,
+    /// Optional explicit relay channel (the detail page's per-relay
+    /// switches); absent means the device's default relay, exactly as
+    /// before.
+    relay: Option<u8>,
 }
 
 pub async fn toggle(
@@ -58,24 +64,33 @@ pub async fn toggle(
     if protected && !confirmed {
         // Return the UNCHANGED card (primary target #card-{id}) plus the modal as an
         // OOB swap into #modal. The modal's confirm form re-posts here with
-        // confirmed=true and targets #card-{id}. The modal injects `confirmed=true`.
+        // confirmed=true and targets #card-{id}, echoing the relay channel so
+        // the confirmed toggle hits the SAME relay. The modal injects
+        // `confirmed=true`.
+        let series = history::snapshot(&state.inner.history);
         let fleet = state.inner.fleet.read().await;
         let dev = fleet
             .get(&id)
             .ok_or_else(|| AppError::NotFound(id.clone()))?;
+        let relay_str = form.relay.map(|r| r.to_string());
+        let mut hidden: Vec<(&str, &str)> = Vec::new();
+        if let Some(r) = relay_str.as_deref() {
+            hidden.push(("relay", r));
+        }
         let modal = confirm_modal(
             &format!("Switch {}?", dev.display_name()),
             &format!("/device/{id}/toggle"),
-            &[],
+            &hidden,
             &format!("#card-{id}"),
+            "outerHTML",
         );
-        return Ok(html! { (device_card(dev)) (modal) }.into_response());
+        return Ok(html! { (device_card(dev, series.device(&id))) (modal) }.into_response());
     }
     let client = state
         .client(vendor)
         .ok_or_else(|| AppError::Internal(format!("no client configured for {host}'s vendor")))?;
     let target = state.target_for(&host).await;
-    let relay = ops::set_power(client.as_ref(), &target, None, PowerAction::Toggle).await?;
+    let relay = ops::set_power(client.as_ref(), &target, form.relay, PowerAction::Toggle).await?;
     // Refresh full status so the card reflects the new relay plus fresh energy/RSSI.
     // The follow-up read decides reachability EXACTLY like the poller: a control action
     // never fabricates reachability, so a FAILED refresh renders the card offline / n/a
@@ -103,14 +118,15 @@ pub async fn toggle(
         }
     }
     state.notify();
+    let series = history::snapshot(&state.inner.history);
     let fleet = state.inner.fleet.read().await;
     let dev = fleet
         .get(&id)
         .ok_or_else(|| AppError::NotFound(id.clone()))?;
-    let toast = undo_toast(&id, relay.state.as_str());
+    let toast = undo_toast(&id, form.relay, relay.state.as_str());
     // close_modal() OOB-clears #modal (a no-op when no modal was open, e.g. a normal
     // card toggle); the toast appends to #toasts.
-    Ok(html! { (device_card(dev)) (close_modal()) (toast) }.into_response())
+    Ok(html! { (device_card(dev, series.device(&id))) (close_modal()) (toast) }.into_response())
 }
 
 #[derive(Deserialize)]
@@ -142,14 +158,16 @@ pub async fn bulk_power(
     };
     let confirmed = form.confirmed.as_deref() == Some("true");
     if !confirmed {
+        let series = history::snapshot(&state.inner.history);
         let fleet = state.inner.fleet.read().await;
         let modal = confirm_modal(
             &format!("Switch all devices {}?", form.action),
             "/devices/power",
             &[("action", &form.action)],
             "#grid",
+            "outerHTML",
         );
-        return Ok(html! { (dashboard::grid(&fleet)) (modal) }.into_response());
+        return Ok(html! { (dashboard::grid(&fleet, &series)) (modal) }.into_response());
     }
 
     // Snapshot (id, host, vendor) without holding the fleet lock across device
@@ -217,7 +235,8 @@ pub async fn bulk_power(
     // reflects fresh status rather than the command's own (unrefreshed) response.
     poller::refresh_once(&state).await;
 
+    let series = history::snapshot(&state.inner.history);
     let fleet = state.inner.fleet.read().await;
     let toast = bulk_toast(switched, failed);
-    Ok(html! { (dashboard::grid(&fleet)) (close_modal()) (toast) }.into_response())
+    Ok(html! { (dashboard::grid(&fleet, &series)) (close_modal()) (toast) }.into_response())
 }

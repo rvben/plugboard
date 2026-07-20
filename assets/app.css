@@ -743,17 +743,31 @@ input.mono {
   margin: 0;
 }
 
-/* The live fleet strip: aggregate instruments above the grid. Values are
-   honest sums/counts over the CURRENT poll only; when nothing reports power
-   the load shows n/a, never 0. */
+/* ---------- Sparklines ---------- */
+
+/* Server-rendered power history. The SVG stretches to its box
+   (preserveAspectRatio="none" + non-scaling strokes); color comes from the
+   surrounding context via currentColor. */
+.sparkline {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* The live fleet hero: the measured load as the app's primary instrument,
+   its recent shape, and the fleet counts. Values are honest sums/counts over
+   the CURRENT poll only; when nothing reports power the load shows n/a,
+   never 0. */
 .fleet-summary {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: var(--space-4) var(--space-6);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-4) var(--space-5);
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   margin-bottom: var(--space-4);
 }
 
@@ -761,7 +775,6 @@ input.mono {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-width: 7rem;
 }
 
 .fleet-summary .stat-label {
@@ -780,6 +793,12 @@ input.mono {
   line-height: 1.2;
 }
 
+.fleet-summary .stat-value.stat-hero {
+  font-size: clamp(1.75rem, 4vw, 2.5rem);
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+
 .fleet-summary .stat-value .unit,
 .fleet-summary .stat-value .of {
   font-size: var(--text-sm);
@@ -787,9 +806,27 @@ input.mono {
   color: var(--muted);
 }
 
+.fleet-summary .stat-hero .unit {
+  font-size: var(--text-md);
+}
+
 .fleet-summary .stat-detail {
   color: var(--muted);
   font-size: var(--text-xs);
+}
+
+.summary-spark {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+  max-width: 30rem;
+  height: 3.25rem;
+  color: var(--accent);
+  align-self: stretch;
+}
+
+.summary-counts {
+  display: flex;
+  gap: var(--space-6);
 }
 
 .grid {
@@ -873,6 +910,14 @@ input.mono {
 .card-today {
   font-size: var(--text-sm);
   color: var(--muted);
+}
+
+/* The card's recent-power strip: quiet by default, it exists to give the
+   number above it a shape, not to compete with it. */
+.card-spark {
+  height: 1.75rem;
+  color: color-mix(in oklab, var(--accent) 75%, var(--muted));
+  opacity: 0.9;
 }
 
 .card-meta {
@@ -1152,13 +1197,18 @@ dd {
 
 /* ---------- Device detail ---------- */
 
+/* The hero panel: identity + state + primary switch on top, the energy
+   instrument cluster beneath. */
+.device-hero {
+  padding: var(--space-5);
+}
+
 .device-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: var(--space-3);
-  margin-bottom: var(--space-5);
 }
 
 .device-header .device-title {
@@ -1188,6 +1238,65 @@ dd {
   margin: 0;
 }
 
+/* The energy cluster: live draw + its recent shape on the left, meter stats
+   on the right. */
+.energy-cluster {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-5) var(--space-8);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.energy-now {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.energy-now h2 {
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: var(--space-2);
+}
+
+.energy-hero {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.energy-hero .value {
+  font-size: clamp(2.25rem, 6vw, 3.5rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+}
+
+.energy-hero .unit {
+  color: var(--muted);
+  font-size: var(--text-lg);
+  font-weight: 500;
+}
+
+.hero-spark {
+  height: 3.25rem;
+  margin-top: var(--space-3);
+  color: var(--accent);
+}
+
+.energy-stats {
+  flex: 0 1 auto;
+  grid-template-columns: max-content max-content;
+  column-gap: var(--space-5);
+}
+
 /* Status panels flow into two balanced columns on wide screens; `columns`
    (not grid) so short panels never leave row-aligned gaps. */
 @media (min-width: 760px) {
@@ -1206,7 +1315,8 @@ dd {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-2) 0;
+  gap: var(--space-3);
+  padding: var(--space-1) 0;
   border-bottom: 1px solid var(--border);
 }
 
@@ -1215,31 +1325,13 @@ dd {
   padding-bottom: 0;
 }
 
+.relays li .control-row {
+  width: auto;
+}
+
 .relay-index {
   font-size: var(--text-sm);
   font-weight: 600;
-}
-
-/* The energy panel leads with the live draw as a meter readout. */
-.energy-hero {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  margin-bottom: var(--space-4);
-}
-
-.energy-hero .value {
-  font-size: var(--text-2xl);
-  font-weight: 700;
-  letter-spacing: -0.01em;
-}
-
-.energy-hero .unit {
-  color: var(--muted);
-  font-size: var(--text-md);
-  font-weight: 500;
 }
 
 /* ---------- Admin panel ---------- */
@@ -1275,6 +1367,50 @@ dd {
 
 #admin-result:empty {
   display: none;
+}
+
+/* The console log: a terminal. Deliberately dark in BOTH themes (a terminal
+   is its own surface), scrolling, pinned to the newest entry by app.js. */
+.console-log {
+  margin-top: var(--space-3);
+  background: light-dark(oklch(21% 0.02 262), oklch(14% 0.014 262));
+  border: 1px solid light-dark(oklch(30% 0.02 262), var(--border));
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  max-height: 22rem;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.console-log:empty {
+  display: none;
+}
+
+.console-entry {
+  padding: var(--space-2) 0;
+}
+
+.console-entry + .console-entry {
+  border-top: 1px solid oklch(100% 0 0 / 0.08);
+}
+
+.console-cmd {
+  color: oklch(88% 0.01 255);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.console-prompt {
+  color: light-dark(oklch(78% 0.12 262), var(--accent));
+  font-weight: 700;
+}
+
+.console-out {
+  margin: var(--space-1) 0 0;
+  color: oklch(72% 0.012 255);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .admin-output {

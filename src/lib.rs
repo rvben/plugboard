@@ -3,6 +3,7 @@ pub mod auth;
 pub mod config;
 pub mod error;
 pub mod fleet;
+pub mod history;
 pub mod metrics;
 pub mod ops;
 pub mod poller;

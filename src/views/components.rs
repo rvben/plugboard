@@ -18,6 +18,88 @@ pub fn power_mark(size: u32) -> Markup {
     }
 }
 
+/// Flush a run of connected sample points into path data: a polyline (plus a
+/// soft area fill down to the baseline) for two or more points, a short
+/// horizontal tick for an isolated point (so a lone real sample between gaps
+/// is still visible without fabricating a line).
+fn flush_run(
+    run: &mut Vec<(f64, f64)>,
+    baseline: f64,
+    lines: &mut Vec<String>,
+    areas: &mut Vec<String>,
+) {
+    match run.len() {
+        0 => {}
+        1 => {
+            let (x, y) = run[0];
+            lines.push(format!("M{:.1} {y:.1}L{:.1} {y:.1}", x - 0.8, x + 0.8));
+        }
+        _ => {
+            let mut d = String::new();
+            for (i, (x, y)) in run.iter().enumerate() {
+                let cmd = if i == 0 { 'M' } else { 'L' };
+                d.push_str(&format!("{cmd}{x:.1} {y:.1}"));
+            }
+            lines.push(d.clone());
+            let (x0, _) = run[0];
+            let (xn, _) = run[run.len() - 1];
+            areas.push(format!(
+                "M{x0:.1} {baseline:.1}{}L{xn:.1} {baseline:.1}Z",
+                d.replacen('M', "L", 1)
+            ));
+        }
+    }
+    run.clear();
+}
+
+/// Server-rendered sparkline of recent power samples as a small inline SVG.
+/// The series is right-anchored (newest sample at the right edge, history
+/// filling leftward as ticks accumulate) and scaled against its own maximum
+/// with a zero baseline, so the shape is proportional to absolute draw.
+///
+/// Honesty: `None` samples (offline / unpolled / non-metering ticks) BREAK
+/// the line into gaps - never interpolated across, never drawn as zero (a
+/// measured `0.0` IS drawn, as a line along the baseline). A series with no
+/// real sample renders nothing at all rather than a fabricated flat line.
+/// The numeric readouts remain the accessible data; the SVG is aria-hidden.
+pub fn sparkline(series: &[Option<f64>], label: &str) -> Markup {
+    const W: f64 = 100.0;
+    const H: f64 = 32.0;
+    const PAD: f64 = 2.5;
+    if !series.iter().any(Option::is_some) {
+        return html! {};
+    }
+    let cap = crate::history::CAPACITY.max(series.len());
+    let n = series.len();
+    let max = series.iter().flatten().fold(0.0_f64, |a, &b| a.max(b));
+    let scale = if max > 0.0 { max } else { 1.0 };
+    let x = |i: usize| (cap - n + i) as f64 / (cap - 1) as f64 * W;
+    let y = |v: f64| H - PAD - (v / scale) * (H - 2.0 * PAD);
+    let baseline = H - PAD;
+    let mut lines: Vec<String> = Vec::new();
+    let mut areas: Vec<String> = Vec::new();
+    let mut run: Vec<(f64, f64)> = Vec::new();
+    for (i, s) in series.iter().enumerate() {
+        match s {
+            Some(v) => run.push((x(i), y(*v))),
+            None => flush_run(&mut run, baseline, &mut lines, &mut areas),
+        }
+    }
+    flush_run(&mut run, baseline, &mut lines, &mut areas);
+    html! {
+        svg.sparkline viewBox=(format!("0 0 {W} {H}")) preserveAspectRatio="none" aria-hidden="true" {
+            title { (label) }
+            @for d in &areas {
+                path.spark-area d=(d) fill="currentColor" fill-opacity="0.12" stroke="none" {}
+            }
+            @for d in &lines {
+                path d=(d) fill="none" stroke="currentColor" stroke-width="1.5"
+                    stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" {}
+            }
+        }
+    }
+}
+
 /// Render `Some(v)` as-is, `None` as a muted "n/a" span. Never coerces an
 /// absent value to `0` or an empty string.
 pub fn na<T: Display>(v: Option<T>) -> Markup {
@@ -144,11 +226,12 @@ pub enum ToggleTarget<'a> {
     Discard,
 }
 
-/// The relay toggle control: a real switch when the relay state is CONFIRMED
-/// by the last successful STATUS read, a plain "Toggle" button when the
-/// device is online but the relay is unknown, and a disabled button when the
-/// device is unreachable. A switch never fakes a position: its checked state
-/// comes from live status only, exactly like `state_badge`.
+/// The device's primary relay toggle control (the DEFAULT relay, no explicit
+/// channel), labeled "Power": a real switch when the relay state is
+/// CONFIRMED by the last successful STATUS read, a plain "Toggle" button
+/// when the device is online but the relay is unknown, and a disabled button
+/// when the device is unreachable. A switch never fakes a position: its
+/// checked state comes from live status only, exactly like `state_badge`.
 pub fn relay_control(dev: &DeviceView, target: ToggleTarget) -> Markup {
     let relay = if dev.is_online() {
         dev.status
@@ -158,7 +241,32 @@ pub fn relay_control(dev: &DeviceView, target: ToggleTarget) -> Markup {
     } else {
         None
     };
+    toggle_control(dev, relay, None, Some("Power"), target)
+}
+
+/// A per-relay switch for a specific channel (the detail page's relay rows).
+/// Posts the same `/device/:id/toggle` route with an explicit `relay` field;
+/// the row already names the relay, so no extra label is rendered.
+pub fn relay_channel_control(
+    dev: &DeviceView,
+    relay: &switchkit::Relay,
+    target: ToggleTarget,
+) -> Markup {
+    toggle_control(dev, Some(&relay.state), Some(relay.index), None, target)
+}
+
+fn toggle_control(
+    dev: &DeviceView,
+    relay: Option<&RelayState>,
+    channel: Option<u8>,
+    label: Option<&str>,
+    target: ToggleTarget,
+) -> Markup {
     let name = dev.display_name();
+    let subject = match channel {
+        Some(idx) => format!("{name} relay {idx}"),
+        None => name.to_string(),
+    };
     let (hx_target, hx_swap, on_detail_page) = match target {
         ToggleTarget::Card(id) => (Some(format!("#card-{id}")), "outerHTML", false),
         ToggleTarget::Discard => (None, "none", true),
@@ -168,15 +276,20 @@ pub fn relay_control(dev: &DeviceView, target: ToggleTarget) -> Markup {
             hx-post=(format!("/device/{}/toggle", dev.id))
             hx-target=[hx_target]
             hx-swap=(hx_swap) {
-            span.control-label { "Power" }
+            @if let Some(idx) = channel {
+                input type="hidden" name="relay" value=(idx);
+            }
+            @if let Some(label) = label {
+                span.control-label { (label) }
+            }
             @match relay {
                 Some(RelayState::On) => {
                     button.switch type="submit" role="switch" aria-checked="true"
-                        aria-label=(format!("Turn {name} off")) {}
+                        aria-label=(format!("Turn {subject} off")) {}
                 }
                 Some(RelayState::Off) => {
                     button.switch type="submit" role="switch" aria-checked="false"
-                        aria-label=(format!("Turn {name} on")) {}
+                        aria-label=(format!("Turn {subject} on")) {}
                 }
                 Some(RelayState::Unknown(_)) => {
                     button.btn-toggle type="submit" { "Toggle" }
@@ -192,16 +305,23 @@ pub fn relay_control(dev: &DeviceView, target: ToggleTarget) -> Markup {
 /// A confirmation modal, rendered as an OUT-OF-BAND swap into the layout's `#modal`
 /// placeholder, so opening it never disturbs the page or the card. The confirm form
 /// re-posts `action` with `confirmed=true` plus `hidden` (the original validated
-/// payload) and targets `target` (the element the confirmed response replaces, e.g.
-/// the card `#card-{id}` or the admin panel `#admin-result`). Values are auto-escaped
-/// by maud. NEVER pass credentials through here.
-pub fn confirm_modal(title: &str, action: &str, hidden: &[(&str, &str)], target: &str) -> Markup {
+/// payload) and applies the response to `target` with `swap` (e.g. the card
+/// `#card-{id}` with `outerHTML`, or the console log `#console-log` with
+/// `beforeend`). Values are auto-escaped by maud. NEVER pass credentials
+/// through here.
+pub fn confirm_modal(
+    title: &str,
+    action: &str,
+    hidden: &[(&str, &str)],
+    target: &str,
+    swap: &str,
+) -> Markup {
     html! {
         div id="modal" hx-swap-oob="true" {
             div.modal-backdrop {
                 div.modal role="dialog" aria-modal="true" aria-labelledby="modal-title" {
                     h2 id="modal-title" { (title) }
-                    form hx-post=(action) hx-target=(target) hx-swap="outerHTML" {
+                    form hx-post=(action) hx-target=(target) hx-swap=(swap) {
                         input type="hidden" name="confirmed" value="true";
                         @for (k, v) in hidden {
                             input type="hidden" name=(k) value=(v);
@@ -252,14 +372,21 @@ pub fn bulk_toast(switched: usize, failed: usize) -> Markup {
 /// `state.notify()` pushes the updated card over SSE immediately, and the
 /// `device-toggle` class makes the detail page's live region refresh itself
 /// (see `app.js`), so both surfaces update without a direct swap.
-pub fn undo_toast(id: &str, new_state: &str) -> Markup {
+///
+/// `channel` is echoed back so undoing a per-relay toggle switches the SAME
+/// relay, never the default one.
+pub fn undo_toast(id: &str, channel: Option<u8>, new_state: &str) -> Markup {
+    let vals = match channel {
+        Some(idx) => format!(r#"{{"confirmed":"true","relay":"{idx}"}}"#),
+        None => r#"{"confirmed":"true"}"#.to_string(),
+    };
     html! {
         div id="toasts" hx-swap-oob="beforeend:#toasts" {
             div.toast {
                 span { "Switched to " (new_state) }
                 button.undo.device-toggle
                     hx-post=(format!("/device/{id}/toggle"))
-                    hx-vals=r#"{"confirmed":"true"}"#
+                    hx-vals=(vals)
                     hx-swap="none" { "Undo" }
             }
         }
@@ -270,7 +397,50 @@ pub fn undo_toast(id: &str, new_state: &str) -> Markup {
 mod tests {
     use switchkit::{Signal, Vendor};
 
-    use super::{signal_indicator, vendor_tag};
+    use super::{signal_indicator, sparkline, vendor_tag};
+
+    /// Count of stroked line paths (the data lines, as opposed to the soft
+    /// area fills that accompany them).
+    fn line_paths(html: &str) -> usize {
+        html.matches(r#"fill="none""#).count()
+    }
+
+    /// A gap in the series must BREAK the line (two separate paths), never be
+    /// interpolated across or drawn as a zero point.
+    #[test]
+    fn sparkline_renders_gaps_as_gaps_never_interpolated() {
+        let series = [Some(1.0), Some(2.0), None, Some(3.0), Some(1.0)];
+        let html = sparkline(&series, "test").into_string();
+        assert_eq!(
+            line_paths(&html),
+            2,
+            "a None sample must split the line into two paths: {html}"
+        );
+    }
+
+    /// A series with no real sample renders NOTHING - a fabricated flat line
+    /// would read as "measured zero the whole time".
+    #[test]
+    fn sparkline_renders_nothing_without_a_real_sample() {
+        assert_eq!(sparkline(&[], "test").into_string(), "");
+        assert_eq!(sparkline(&[None, None, None], "test").into_string(), "");
+    }
+
+    /// Real measured zeros ARE data and draw a line along the baseline.
+    #[test]
+    fn sparkline_draws_real_zeros() {
+        let html = sparkline(&[Some(0.0), Some(0.0)], "test").into_string();
+        assert_eq!(line_paths(&html), 1, "{html}");
+    }
+
+    /// An isolated sample between gaps still renders (as a short tick, with
+    /// no area - there is no span to fill).
+    #[test]
+    fn sparkline_shows_isolated_samples() {
+        let html = sparkline(&[None, Some(5.0), None], "test").into_string();
+        assert_eq!(line_paths(&html), 1, "{html}");
+        assert!(!html.contains("spark-area"), "{html}");
+    }
 
     #[test]
     fn signal_indicator_shows_percentage_bars_and_label() {

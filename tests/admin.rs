@@ -194,12 +194,16 @@ async fn console_safe_command_executes_and_renders_json() {
 
     let body = body_string(response).await;
     assert!(
-        body.contains(r#"id="admin-result""#),
-        "response should carry the admin-result fragment, body was: {body}"
+        body.contains("console-entry"),
+        "response should carry a console-log entry, body was: {body}"
+    );
+    assert!(
+        body.contains("Status 8"),
+        "the entry should echo the command terminal-style, body was: {body}"
     );
     assert!(
         body.contains("StatusSNS") && body.contains("12.3"),
-        "the device's JSON response should be rendered in the panel, body was: {body}"
+        "the device's JSON response should be rendered in the entry, body was: {body}"
     );
 }
 
@@ -259,7 +263,7 @@ async fn console_destructive_command_requires_confirmation_before_hitting_device
     assert_eq!(confirmed.status(), StatusCode::OK);
     assert_eq!(reset.hits(), 1, "confirmed=true must send the command");
     let confirmed_body = body_string(confirmed).await;
-    assert!(confirmed_body.contains(r#"id="admin-result""#));
+    assert!(confirmed_body.contains("console-entry"));
     assert!(confirmed_body.contains("Reset"));
 }
 
@@ -330,7 +334,7 @@ async fn console_requires_confirmation_command_requires_confirmation_before_hitt
     assert_eq!(confirmed.status(), StatusCode::OK);
     assert_eq!(setoption.hits(), 1, "confirmed=true must send the command");
     let confirmed_body = body_string(confirmed).await;
-    assert!(confirmed_body.contains(r#"id="admin-result""#));
+    assert!(confirmed_body.contains("console-entry"));
     assert!(confirmed_body.contains("SetOption65"));
 }
 

@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use switchkit::{DeviceSnapshot, Vendor};
 
 use crate::fleet::Fleet;
+use crate::history;
 use crate::metrics;
 use crate::ops;
 use crate::redact::scrub_credentials;
@@ -98,6 +99,24 @@ pub async fn refresh_once(state: &AppState) {
         .map(|d| d.as_secs())
         .ok();
     metrics::record_poll_outcomes(&state.inner.metrics, &targets, &updates, now_unix);
+
+    // Record this tick's power samples into the history ring buffers, in
+    // fleet order. A device is `Some(watts)` ONLY when its poll succeeded AND
+    // carried a power reading; an `Err`, a lost task, or a metering-less
+    // snapshot records a gap (`None`), never a fabricated zero.
+    let samples: Vec<(String, Option<f64>)> = targets
+        .iter()
+        .map(|(id, _host, _vendor)| {
+            let power = updates
+                .iter()
+                .find(|(uid, _)| uid == id)
+                .and_then(|(_, result)| result.as_ref().ok())
+                .and_then(|s| s.energy.as_ref())
+                .and_then(|e| e.power_w);
+            (id.clone(), power)
+        })
+        .collect();
+    history::record_tick(&state.inner.history, &samples);
 
     {
         let mut fleet = state.inner.fleet.write().await;

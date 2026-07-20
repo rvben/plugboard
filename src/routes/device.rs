@@ -19,6 +19,7 @@ pub async fn detail(
         show_logout: state.builtin_auth().await,
     };
     let poll_secs = state.inner.config.read().await.poll_interval_secs;
+    let series = crate::history::snapshot(&state.inner.history);
     let fleet = state.inner.fleet.read().await;
     let dev = fleet
         .get(&id)
@@ -27,6 +28,6 @@ pub async fn detail(
         dev.display_name(),
         &csrf.0,
         chrome,
-        device::device_page(dev, poll_secs),
+        device::device_page(dev, poll_secs, series.device(&id)),
     ))
 }
