@@ -2,7 +2,11 @@
 //!
 //! `tasmota-web` already polls every configured device over HTTP, so exposing
 //! that data as Prometheus metrics turns it into a drop-in exporter for a
-//! Tasmota fleet, no MQTT broker and no separate exporter process needed.
+//! mixed-vendor plug fleet, no MQTT broker and no separate exporter process
+//! needed. Every per-device series carries a `vendor` label, and each
+//! vendor's real Wi-Fi signal unit gets its own series (`_wifi_signal_percent`
+//! for Tasmota's quality percentage, `_wifi_rssi_dbm` for Shelly's dBm
+//! reading) rather than a fabricated cross-unit value.
 //!
 //! The guiding rule is the same one the rest of the app follows: absent data
 //! must not become a plausible value. A metric series is emitted ONLY when its
@@ -10,7 +14,7 @@
 //! series at all (Prometheus marks them stale rather than reading a fabricated
 //! `0`), and a relay in `Unknown` state emits no `relay_state` series rather
 //! than a guessed on/off. The one series that is ALWAYS emitted per configured
-//! device is `tasmota_web_device_reachable`, because reachability is always
+//! device is `plugboard_device_reachable`, because reachability is always
 //! known: the last poll either succeeded or it did not.
 
 use std::collections::HashMap;
@@ -62,11 +66,16 @@ pub fn escape_label(v: &str) -> String {
     out
 }
 
-fn device_labels(host: &str, name: &str) -> String {
+/// The single label choke point for every PER-DEVICE series (`build_info` and
+/// `fleet_devices` are fleet-wide and do not go through this). `vendor` comes
+/// from `Vendor::as_str()`, a fixed lowercase set (`"tasmota"`/`"shelly"`),
+/// not user input, so it needs no escaping.
+fn device_labels(host: &str, name: &str, vendor: Vendor) -> String {
     format!(
-        r#"host="{}",name="{}""#,
+        r#"host="{}",name="{}",vendor="{}""#,
         escape_label(host),
-        escape_label(name)
+        escape_label(name),
+        vendor.as_str()
     )
 }
 
@@ -173,32 +182,32 @@ pub fn render(fleet: &Fleet, metrics_state: &MetricsState, version: &str) -> Str
 
     let _ = writeln!(
         out,
-        "# HELP tasmota_web_build_info Static build information for this tasmota-web instance."
+        "# HELP plugboard_build_info Static build information for this tasmota-web instance."
     );
-    let _ = writeln!(out, "# TYPE tasmota_web_build_info gauge");
+    let _ = writeln!(out, "# TYPE plugboard_build_info gauge");
     let _ = writeln!(
         out,
-        r#"tasmota_web_build_info{{version="{}"}} 1"#,
+        r#"plugboard_build_info{{version="{}"}} 1"#,
         escape_label(version)
     );
 
     let _ = writeln!(
         out,
-        "# HELP tasmota_web_fleet_devices Number of devices configured in the fleet."
+        "# HELP plugboard_fleet_devices Number of devices configured in the fleet."
     );
-    let _ = writeln!(out, "# TYPE tasmota_web_fleet_devices gauge");
-    let _ = writeln!(out, "tasmota_web_fleet_devices {}", fleet.devices.len());
+    let _ = writeln!(out, "# TYPE plugboard_fleet_devices gauge");
+    let _ = writeln!(out, "plugboard_fleet_devices {}", fleet.devices.len());
 
     let _ = writeln!(
         out,
-        "# HELP tasmota_web_device_reachable Whether the last poll of this device succeeded (1) or failed (0). Always present for every configured device."
+        "# HELP plugboard_device_reachable Whether the last poll of this device succeeded (1) or failed (0). Always present for every configured device."
     );
-    let _ = writeln!(out, "# TYPE tasmota_web_device_reachable gauge");
+    let _ = writeln!(out, "# TYPE plugboard_device_reachable gauge");
     for dev in &fleet.devices {
-        let labels = device_labels(&dev.host, dev.display_name());
+        let labels = device_labels(&dev.host, dev.display_name(), dev.vendor);
         let _ = writeln!(
             out,
-            "tasmota_web_device_reachable{{{labels}}} {}",
+            "plugboard_device_reachable{{{labels}}} {}",
             dev.reachable as u8
         );
     }
@@ -211,104 +220,116 @@ pub fn render(fleet: &Fleet, metrics_state: &MetricsState, version: &str) -> Str
 
     let _ = writeln!(
         out,
-        "# HELP tasmota_web_device_last_poll_success_timestamp_seconds Unix timestamp of the last successful poll of this device. Absent until the device has ever had one."
+        "# HELP plugboard_device_last_poll_success_timestamp_seconds Unix timestamp of the last successful poll of this device. Absent until the device has ever had one."
     );
     let _ = writeln!(
         out,
-        "# TYPE tasmota_web_device_last_poll_success_timestamp_seconds gauge"
+        "# TYPE plugboard_device_last_poll_success_timestamp_seconds gauge"
     );
     for dev in &fleet.devices {
         if let Some(ts) = metrics_for(&dev.id).last_success_unix {
-            let labels = device_labels(&dev.host, dev.display_name());
+            let labels = device_labels(&dev.host, dev.display_name(), dev.vendor);
             let _ = writeln!(
                 out,
-                "tasmota_web_device_last_poll_success_timestamp_seconds{{{labels}}} {ts}"
+                "plugboard_device_last_poll_success_timestamp_seconds{{{labels}}} {ts}"
             );
         }
     }
 
     let _ = writeln!(
         out,
-        "# HELP tasmota_web_device_poll_total Total number of poll attempts against this device, by result."
+        "# HELP plugboard_device_poll_total Total number of poll attempts against this device, by result."
     );
-    let _ = writeln!(out, "# TYPE tasmota_web_device_poll_total counter");
+    let _ = writeln!(out, "# TYPE plugboard_device_poll_total counter");
     for dev in &fleet.devices {
-        let labels = device_labels(&dev.host, dev.display_name());
+        let labels = device_labels(&dev.host, dev.display_name(), dev.vendor);
         let m = metrics_for(&dev.id);
         let _ = writeln!(
             out,
-            "tasmota_web_device_poll_total{{{labels},result=\"success\"}} {}",
+            "plugboard_device_poll_total{{{labels},result=\"success\"}} {}",
             m.poll_success
         );
         let _ = writeln!(
             out,
-            "tasmota_web_device_poll_total{{{labels},result=\"error\"}} {}",
+            "plugboard_device_poll_total{{{labels},result=\"error\"}} {}",
             m.poll_error
         );
     }
 
     let _ = writeln!(
         out,
-        "# HELP tasmota_web_device_power_watts Live power draw in watts. Absent when offline or the device has no energy sensor."
+        "# HELP plugboard_device_power_watts Live power draw in watts. Absent when offline or the device has no energy sensor."
     );
-    let _ = writeln!(out, "# TYPE tasmota_web_device_power_watts gauge");
+    let _ = writeln!(out, "# TYPE plugboard_device_power_watts gauge");
     for dev in &fleet.devices {
         if let Some(w) = dev.power_w() {
-            let labels = device_labels(&dev.host, dev.display_name());
-            let _ = writeln!(out, "tasmota_web_device_power_watts{{{labels}}} {w}");
+            let labels = device_labels(&dev.host, dev.display_name(), dev.vendor);
+            let _ = writeln!(out, "plugboard_device_power_watts{{{labels}}} {w}");
         }
     }
 
     let _ = writeln!(
         out,
-        "# HELP tasmota_web_device_energy_today_kwh Energy consumed today, in kWh. Absent when offline or the device has no energy sensor."
+        "# HELP plugboard_device_energy_today_kwh Energy consumed today, in kWh. Absent when offline or the device has no energy sensor."
     );
-    let _ = writeln!(out, "# TYPE tasmota_web_device_energy_today_kwh gauge");
+    let _ = writeln!(out, "# TYPE plugboard_device_energy_today_kwh gauge");
     for dev in &fleet.devices {
         if let Some(kwh) = dev.today_kwh() {
-            let labels = device_labels(&dev.host, dev.display_name());
-            let _ = writeln!(out, "tasmota_web_device_energy_today_kwh{{{labels}}} {kwh}");
+            let labels = device_labels(&dev.host, dev.display_name(), dev.vendor);
+            let _ = writeln!(out, "plugboard_device_energy_today_kwh{{{labels}}} {kwh}");
         }
     }
 
     let _ = writeln!(
         out,
-        "# HELP tasmota_web_device_energy_total_kwh Cumulative energy consumed, in kWh. Absent when offline or the device has no energy sensor."
+        "# HELP plugboard_device_energy_total_kwh Cumulative energy consumed, in kWh. Absent when offline or the device has no energy sensor."
     );
-    let _ = writeln!(out, "# TYPE tasmota_web_device_energy_total_kwh gauge");
+    let _ = writeln!(out, "# TYPE plugboard_device_energy_total_kwh gauge");
     for dev in &fleet.devices {
         if let Some(kwh) = total_kwh(dev) {
-            let labels = device_labels(&dev.host, dev.display_name());
-            let _ = writeln!(out, "tasmota_web_device_energy_total_kwh{{{labels}}} {kwh}");
+            let labels = device_labels(&dev.host, dev.display_name(), dev.vendor);
+            let _ = writeln!(out, "plugboard_device_energy_total_kwh{{{labels}}} {kwh}");
         }
     }
 
     let _ = writeln!(
         out,
-        "# HELP tasmota_web_device_wifi_signal_percent Wi-Fi signal quality, 0-100. Absent when offline or not yet reported."
+        "# HELP plugboard_device_wifi_signal_percent Wi-Fi signal quality, 0-100, as reported by vendors whose native unit is a percentage (Tasmota). Absent when offline, not yet reported, or the device reports signal in dBm instead (see plugboard_device_wifi_rssi_dbm)."
     );
-    let _ = writeln!(out, "# TYPE tasmota_web_device_wifi_signal_percent gauge");
+    let _ = writeln!(out, "# TYPE plugboard_device_wifi_signal_percent gauge");
     for dev in &fleet.devices {
         if let Some(rssi) = dev.rssi() {
-            let labels = device_labels(&dev.host, dev.display_name());
+            let labels = device_labels(&dev.host, dev.display_name(), dev.vendor);
             let _ = writeln!(
                 out,
-                "tasmota_web_device_wifi_signal_percent{{{labels}}} {rssi}"
+                "plugboard_device_wifi_signal_percent{{{labels}}} {rssi}"
             );
         }
     }
 
     let _ = writeln!(
         out,
-        "# HELP tasmota_web_device_relay_state Relay state, 1 = on, 0 = off. A relay in an unrecognized state emits no series."
+        "# HELP plugboard_device_wifi_rssi_dbm Wi-Fi signal strength in dBm, as reported by vendors whose native unit is dBm (Shelly). Absent when offline, not yet reported, or the device reports signal as a percentage instead (see plugboard_device_wifi_signal_percent). Never derived from the percent reading - each vendor's real unit is its own series."
     );
-    let _ = writeln!(out, "# TYPE tasmota_web_device_relay_state gauge");
+    let _ = writeln!(out, "# TYPE plugboard_device_wifi_rssi_dbm gauge");
     for dev in &fleet.devices {
-        let labels = device_labels(&dev.host, dev.display_name());
+        if let Some(dbm) = dev.signal().and_then(|s| s.rssi_dbm) {
+            let labels = device_labels(&dev.host, dev.display_name(), dev.vendor);
+            let _ = writeln!(out, "plugboard_device_wifi_rssi_dbm{{{labels}}} {dbm}");
+        }
+    }
+
+    let _ = writeln!(
+        out,
+        "# HELP plugboard_device_relay_state Relay state, 1 = on, 0 = off. A relay in an unrecognized state emits no series."
+    );
+    let _ = writeln!(out, "# TYPE plugboard_device_relay_state gauge");
+    for dev in &fleet.devices {
+        let labels = device_labels(&dev.host, dev.display_name(), dev.vendor);
         for (index, value) in relay_states(dev) {
             let _ = writeln!(
                 out,
-                "tasmota_web_device_relay_state{{{labels},relay=\"{index}\"}} {value}"
+                "plugboard_device_relay_state{{{labels},relay=\"{index}\"}} {value}"
             );
         }
     }
@@ -388,12 +409,23 @@ mod tests {
         reachable: bool,
         status: Option<DeviceSnapshot>,
     ) -> DeviceView {
+        device_with_vendor(id, host, name, Vendor::Tasmota, reachable, status)
+    }
+
+    fn device_with_vendor(
+        id: &str,
+        host: &str,
+        name: &str,
+        vendor: Vendor,
+        reachable: bool,
+        status: Option<DeviceSnapshot>,
+    ) -> DeviceView {
         DeviceView {
             id: id.into(),
             name: name.into(),
             host: host.into(),
             protected: false,
-            vendor: Vendor::Tasmota,
+            vendor,
             reachable,
             status,
             error: None,
@@ -438,27 +470,33 @@ mod tests {
         let text = render(&fleet, &metrics_state, "0.0.0-test");
 
         assert!(
-            text.contains(r#"tasmota_web_device_reachable{host="192.0.2.10",name="Freezer"} 0"#),
+            text.contains(
+                r#"plugboard_device_reachable{host="192.0.2.10",name="Freezer",vendor="tasmota"} 0"#
+            ),
             "text was:\n{text}"
         );
         assert!(
-            !text.contains("tasmota_web_device_power_watts{host=\"192.0.2.10\""),
+            !text.contains("plugboard_device_power_watts{host=\"192.0.2.10\""),
             "an offline device must never emit power_watts, real or fabricated; text was:\n{text}"
         );
         assert!(
-            !text.contains("tasmota_web_device_energy_today_kwh{host=\"192.0.2.10\""),
+            !text.contains("plugboard_device_energy_today_kwh{host=\"192.0.2.10\""),
             "text was:\n{text}"
         );
         assert!(
-            !text.contains("tasmota_web_device_energy_total_kwh{host=\"192.0.2.10\""),
+            !text.contains("plugboard_device_energy_total_kwh{host=\"192.0.2.10\""),
             "text was:\n{text}"
         );
         assert!(
-            !text.contains("tasmota_web_device_wifi_signal_percent{host=\"192.0.2.10\""),
+            !text.contains("plugboard_device_wifi_signal_percent{host=\"192.0.2.10\""),
             "text was:\n{text}"
         );
         assert!(
-            !text.contains("tasmota_web_device_relay_state{host=\"192.0.2.10\""),
+            !text.contains("plugboard_device_wifi_rssi_dbm{host=\"192.0.2.10\""),
+            "text was:\n{text}"
+        );
+        assert!(
+            !text.contains("plugboard_device_relay_state{host=\"192.0.2.10\""),
             "text was:\n{text}"
         );
     }
@@ -479,19 +517,21 @@ mod tests {
         let text = render(&fleet, &metrics_state, "0.0.0-test");
 
         assert!(
-            text.contains(r#"tasmota_web_device_reachable{host="192.0.2.11",name="Sensor"} 1"#),
+            text.contains(
+                r#"plugboard_device_reachable{host="192.0.2.11",name="Sensor",vendor="tasmota"} 1"#
+            ),
             "text was:\n{text}"
         );
         assert!(
-            !text.contains("tasmota_web_device_power_watts{host=\"192.0.2.11\""),
+            !text.contains("plugboard_device_power_watts{host=\"192.0.2.11\""),
             "a device with no energy sensor must never emit a fabricated power_watts 0; text was:\n{text}"
         );
         assert!(
-            !text.contains("tasmota_web_device_energy_today_kwh{host=\"192.0.2.11\""),
+            !text.contains("plugboard_device_energy_today_kwh{host=\"192.0.2.11\""),
             "text was:\n{text}"
         );
         assert!(
-            !text.contains("tasmota_web_device_energy_total_kwh{host=\"192.0.2.11\""),
+            !text.contains("plugboard_device_energy_total_kwh{host=\"192.0.2.11\""),
             "text was:\n{text}"
         );
     }
@@ -520,7 +560,7 @@ mod tests {
         let text = render(&fleet, &metrics_state, "0.0.0-test");
 
         assert!(
-            !text.contains("tasmota_web_device_relay_state{host=\"192.0.2.12\""),
+            !text.contains("plugboard_device_relay_state{host=\"192.0.2.12\""),
             "an Unknown relay state must never be guessed as on(1) or off(0); text was:\n{text}"
         );
     }
@@ -557,36 +597,42 @@ mod tests {
         let text = render(&fleet, &metrics_state, "0.0.0-test");
 
         assert!(
-            text.contains(r#"tasmota_web_device_power_watts{host="192.0.2.13",name="Lamp"} 42.5"#),
-            "text was:\n{text}"
-        );
-        assert!(
             text.contains(
-                r#"tasmota_web_device_energy_today_kwh{host="192.0.2.13",name="Lamp"} 1.25"#
+                r#"plugboard_device_power_watts{host="192.0.2.13",name="Lamp",vendor="tasmota"} 42.5"#
             ),
             "text was:\n{text}"
         );
         assert!(
             text.contains(
-                r#"tasmota_web_device_energy_total_kwh{host="192.0.2.13",name="Lamp"} 87"#
+                r#"plugboard_device_energy_today_kwh{host="192.0.2.13",name="Lamp",vendor="tasmota"} 1.25"#
             ),
             "text was:\n{text}"
         );
         assert!(
             text.contains(
-                r#"tasmota_web_device_wifi_signal_percent{host="192.0.2.13",name="Lamp"} 90"#
+                r#"plugboard_device_energy_total_kwh{host="192.0.2.13",name="Lamp",vendor="tasmota"} 87"#
             ),
             "text was:\n{text}"
         );
         assert!(
             text.contains(
-                r#"tasmota_web_device_relay_state{host="192.0.2.13",name="Lamp",relay="0"} 1"#
+                r#"plugboard_device_wifi_signal_percent{host="192.0.2.13",name="Lamp",vendor="tasmota"} 90"#
+            ),
+            "text was:\n{text}"
+        );
+        assert!(
+            !text.contains("plugboard_device_wifi_rssi_dbm{host=\"192.0.2.13\""),
+            "a Tasmota device reports its signal as a percentage, never a fabricated dBm value; text was:\n{text}"
+        );
+        assert!(
+            text.contains(
+                r#"plugboard_device_relay_state{host="192.0.2.13",name="Lamp",vendor="tasmota",relay="0"} 1"#
             ),
             "text was:\n{text}"
         );
         assert!(
             text.contains(
-                r#"tasmota_web_device_relay_state{host="192.0.2.13",name="Lamp",relay="1"} 0"#
+                r#"plugboard_device_relay_state{host="192.0.2.13",name="Lamp",vendor="tasmota",relay="1"} 0"#
             ),
             "text was:\n{text}"
         );
@@ -647,31 +693,31 @@ mod tests {
 
         assert!(
             text.contains(
-                r#"tasmota_web_device_poll_total{host="192.0.2.20",name="A",result="success"} 2"#
+                r#"plugboard_device_poll_total{host="192.0.2.20",name="A",vendor="tasmota",result="success"} 2"#
             ),
             "text was:\n{text}"
         );
         assert!(
             text.contains(
-                r#"tasmota_web_device_poll_total{host="192.0.2.20",name="A",result="error"} 0"#
+                r#"plugboard_device_poll_total{host="192.0.2.20",name="A",vendor="tasmota",result="error"} 0"#
             ),
             "text was:\n{text}"
         );
         assert!(
             text.contains(
-                r#"tasmota_web_device_poll_total{host="192.0.2.21",name="B",result="error"} 2"#
+                r#"plugboard_device_poll_total{host="192.0.2.21",name="B",vendor="tasmota",result="error"} 2"#
             ),
             "the lost-task tick must count as an error too, text was:\n{text}"
         );
         assert!(
             text.contains(
-                r#"tasmota_web_device_last_poll_success_timestamp_seconds{host="192.0.2.20",name="A"} 2000"#
+                r#"plugboard_device_last_poll_success_timestamp_seconds{host="192.0.2.20",name="A",vendor="tasmota"} 2000"#
             ),
             "text was:\n{text}"
         );
         assert!(
             !text.contains(
-                "tasmota_web_device_last_poll_success_timestamp_seconds{host=\"192.0.2.21\""
+                "plugboard_device_last_poll_success_timestamp_seconds{host=\"192.0.2.21\""
             ),
             "a device with zero successes must never get a fabricated last-success timestamp; text was:\n{text}"
         );
@@ -743,7 +789,136 @@ mod tests {
         let metrics_state: MetricsState = Mutex::new(HashMap::new());
         let text = render(&fleet, &metrics_state, "1.2.3");
 
-        assert!(text.contains(r#"tasmota_web_build_info{version="1.2.3"} 1"#));
-        assert!(text.contains("tasmota_web_fleet_devices 1"));
+        assert!(text.contains(r#"plugboard_build_info{version="1.2.3"} 1"#));
+        assert!(text.contains("plugboard_fleet_devices 1"));
+    }
+
+    /// (a) A REACHABLE Tasmota device with a percent signal reading emits
+    /// `plugboard_device_wifi_signal_percent{...,vendor="tasmota"}` and NEVER
+    /// the dBm series: Tasmota's real unit is a percentage, so nothing
+    /// fabricates a dBm value for it.
+    #[test]
+    fn tasmota_device_emits_percent_signal_not_dbm() {
+        let dev = device_with_vendor(
+            "d-6",
+            "192.0.2.15",
+            "Kettle",
+            Vendor::Tasmota,
+            true,
+            Some(status(None, Some(65), Vec::new())),
+        );
+        let fleet = Fleet { devices: vec![dev] };
+        let metrics_state: MetricsState = Mutex::new(HashMap::new());
+        let text = render(&fleet, &metrics_state, "0.0.0-test");
+
+        assert!(
+            text.contains(
+                r#"plugboard_device_wifi_signal_percent{host="192.0.2.15",name="Kettle",vendor="tasmota"} 65"#
+            ),
+            "text was:\n{text}"
+        );
+        assert!(
+            !text.contains("plugboard_device_wifi_rssi_dbm{host=\"192.0.2.15\""),
+            "a Tasmota device must never emit a fabricated dBm reading; text was:\n{text}"
+        );
+    }
+
+    /// (b) A REACHABLE Shelly device reports its signal in dBm
+    /// (`rssi_dbm = Some`, `quality_percent = None`): emits
+    /// `plugboard_device_wifi_rssi_dbm{...,vendor="shelly"}` and NEVER the
+    /// percent series: Shelly's real unit is dBm, so nothing fabricates a
+    /// percentage for it.
+    #[test]
+    fn shelly_device_emits_dbm_signal_not_percent() {
+        let snapshot = DeviceSnapshot {
+            host: "192.0.2.16".into(),
+            name: Some("Plug".into()),
+            signal: Some(Signal::from_dbm(-62)),
+            uptime: Some("1T00:00:00".into()),
+            ..Default::default()
+        };
+        assert_eq!(snapshot.signal.as_ref().unwrap().quality_percent, None);
+        let dev = device_with_vendor(
+            "d-7",
+            "192.0.2.16",
+            "Outlet",
+            Vendor::Shelly,
+            true,
+            Some(snapshot),
+        );
+        let fleet = Fleet { devices: vec![dev] };
+        let metrics_state: MetricsState = Mutex::new(HashMap::new());
+        let text = render(&fleet, &metrics_state, "0.0.0-test");
+
+        assert!(
+            text.contains(
+                r#"plugboard_device_wifi_rssi_dbm{host="192.0.2.16",name="Outlet",vendor="shelly"} -62"#
+            ),
+            "text was:\n{text}"
+        );
+        assert!(
+            !text.contains("plugboard_device_wifi_signal_percent{host=\"192.0.2.16\""),
+            "a Shelly device must never emit a fabricated percent reading; text was:\n{text}"
+        );
+    }
+
+    /// (c) An OFFLINE device emits ONLY `device_reachable ... 0`: neither
+    /// signal series (percent or dBm) appears, even though its stale,
+    /// carried-over status still holds a dBm reading - `render` must guard
+    /// both signal series on `reachable`, not merely on the field being
+    /// `Some`.
+    #[test]
+    fn offline_device_emits_no_signal_series_of_either_unit() {
+        let snapshot = DeviceSnapshot {
+            host: "192.0.2.17".into(),
+            name: Some("Plug".into()),
+            signal: Some(Signal::from_dbm(-70)),
+            uptime: Some("1T00:00:00".into()),
+            ..Default::default()
+        };
+        let dev = device_with_vendor(
+            "d-8",
+            "192.0.2.17",
+            "Fan",
+            Vendor::Shelly,
+            false,
+            Some(snapshot),
+        );
+        let fleet = Fleet { devices: vec![dev] };
+        let metrics_state: MetricsState = Mutex::new(HashMap::new());
+        let text = render(&fleet, &metrics_state, "0.0.0-test");
+
+        assert!(
+            text.contains(
+                r#"plugboard_device_reachable{host="192.0.2.17",name="Fan",vendor="shelly"} 0"#
+            ),
+            "text was:\n{text}"
+        );
+        assert!(
+            !text.contains("plugboard_device_wifi_rssi_dbm{host=\"192.0.2.17\""),
+            "text was:\n{text}"
+        );
+        assert!(
+            !text.contains("plugboard_device_wifi_signal_percent{host=\"192.0.2.17\""),
+            "text was:\n{text}"
+        );
+    }
+
+    /// The `vendor` label distinguishes two devices that otherwise share a
+    /// host/name shape: a Shelly device's `device_reachable` series carries
+    /// `vendor="shelly"`, never silently defaulting to `"tasmota"`.
+    #[test]
+    fn shelly_device_reachable_series_carries_shelly_vendor_label() {
+        let dev = device_with_vendor("d-9", "192.0.2.18", "Heater", Vendor::Shelly, true, None);
+        let fleet = Fleet { devices: vec![dev] };
+        let metrics_state: MetricsState = Mutex::new(HashMap::new());
+        let text = render(&fleet, &metrics_state, "0.0.0-test");
+
+        assert!(
+            text.contains(
+                r#"plugboard_device_reachable{host="192.0.2.18",name="Heater",vendor="shelly"} 1"#
+            ),
+            "text was:\n{text}"
+        );
     }
 }

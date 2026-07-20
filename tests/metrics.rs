@@ -70,9 +70,9 @@ async fn metrics_route_returns_ok_with_plain_text_content_type() {
 
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     let body = String::from_utf8(bytes.to_vec()).unwrap();
-    assert!(body.contains("tasmota_web_build_info"), "body was:\n{body}");
+    assert!(body.contains("plugboard_build_info"), "body was:\n{body}");
     assert!(
-        body.contains("tasmota_web_device_reachable"),
+        body.contains("plugboard_device_reachable"),
         "body was:\n{body}"
     );
 }
