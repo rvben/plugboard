@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/rvben/plugboard/compare/v0.1.2...v0.2.0) - 2026-07-20
+
 ### Changed
 
 - **BREAKING**: renamed the crate, binary, and config file from `tasmota-web`
@@ -14,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
   from `tasmota_web_*` to `plugboard_*` in a prior change; this rename covers
   everything else (crate/lib/bin names, CLI name, tracing target, UI brand,
   Docker image user/paths).
+
 
 ## [0.1.2](https://github.com/rvben/tasmota-web/compare/v0.1.1...v0.1.2) - 2026-07-19
 
