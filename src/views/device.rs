@@ -160,6 +160,13 @@ fn hero(dev: &DeviceView, history: &Series) -> Markup {
                     (relay_control(dev, ToggleTarget::Discard))
                 }
             }
+            // An unreachable device says WHY, right where you look first
+            // (the scrubbed poll error, not just a badge tooltip).
+            @if !dev.is_online() {
+                @if let Some(err) = dev.error.as_deref() {
+                    p.offline-reason { "Unreachable: " (err) }
+                }
+            }
             @if capabilities(dev).metering {
                 div.energy-cluster {
                     div.energy-now {

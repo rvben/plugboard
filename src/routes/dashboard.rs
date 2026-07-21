@@ -56,7 +56,7 @@ pub async fn toggle(
         let fleet = state.inner.fleet.read().await;
         let dev = fleet
             .get(&id)
-            .ok_or_else(|| AppError::NotFound(id.clone()))?;
+            .ok_or_else(|| AppError::NotFound(format!("Device {id} is not configured.")))?;
         (dev.host.clone(), dev.protected, dev.vendor)
     };
     let confirmed = form.confirmed.as_deref() == Some("true");
@@ -73,7 +73,7 @@ pub async fn toggle(
         let fleet = state.inner.fleet.read().await;
         let dev = fleet
             .get(&id)
-            .ok_or_else(|| AppError::NotFound(id.clone()))?;
+            .ok_or_else(|| AppError::NotFound(format!("Device {id} is not configured.")))?;
         let relay_str = form.relay.map(|r| r.to_string());
         let mut hidden: Vec<(&str, &str)> = Vec::new();
         if let Some(r) = relay_str.as_deref() {
@@ -125,7 +125,7 @@ pub async fn toggle(
     let fleet = state.inner.fleet.read().await;
     let dev = fleet
         .get(&id)
-        .ok_or_else(|| AppError::NotFound(id.clone()))?;
+        .ok_or_else(|| AppError::NotFound(format!("Device {id} is not configured.")))?;
     let toast = undo_toast(&id, form.relay, relay.state.as_str());
     // close_modal() OOB-clears #modal (a no-op when no modal was open, e.g. a normal
     // card toggle); the toast appends to #toasts.

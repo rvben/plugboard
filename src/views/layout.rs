@@ -42,6 +42,32 @@ fn nav_link(href: &str, label: &str, active: bool) -> Markup {
     }
 }
 
+/// A full styled error page for non-htmx navigations (a mistyped URL, a
+/// stale link to a removed device). htmx requests keep their plain-text
+/// error bodies for the toast layer; this page is the browser-navigation
+/// equivalent. `detail` is the (already scrubbed) reason, shown verbatim.
+pub fn error_page(status: axum::http::StatusCode, detail: &str) -> Markup {
+    let title = match status.as_u16() {
+        404 => "Not found",
+        403 => "Forbidden",
+        400 => "Bad request",
+        502 => "Device unreachable",
+        _ => status.canonical_reason().unwrap_or("Error"),
+    };
+    let body = html! {
+        div.error-page {
+            (power_mark(30))
+            p.error-code { (status.as_u16()) }
+            h1 { (title) }
+            @if !detail.is_empty() {
+                p.hint { (detail) }
+            }
+            a.error-home href="/" { "Back to devices" }
+        }
+    };
+    page(title, "", Chrome::login(), body)
+}
+
 /// The full HTML document shell: loads htmx + the SSE extension, and provides
 /// OOB swap targets (`#modal`, `#toasts`) shared by every page. `csrf` is the
 /// current session's CSRF token (see `crate::auth::Csrf`): it is embedded as

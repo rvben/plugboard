@@ -21,7 +21,7 @@ use crate::views::components::vendor_tag;
 /// when detection fails, e.g. in a sandboxed/offline environment).
 fn scan_form(default_range: &str) -> Markup {
     html! {
-        form.discover-form hx-post="/discover/scan" hx-target="#discover-results" hx-swap="innerHTML" {
+        form.discover-form hx-post="/discover/scan" hx-target="#discover-results" hx-swap="innerHTML" hx-indicator="#scan-indicator" {
             div.field {
                 label for="range" { "CIDR range" }
                 input.mono type="text" id="range" name="range" value=(default_range) required;
@@ -75,6 +75,13 @@ pub fn page(default_range: &str) -> Markup {
                 }
             }
             (scan_form(default_range))
+            // htmx toggles `htmx-request` on this element while the scan is
+            // in flight (`hx-indicator` on the form); it lives OUTSIDE the
+            // swap target so it survives every result swap.
+            div.scan-indicator id="scan-indicator" {
+                span.scan-spinner aria-hidden="true" {}
+                "Scanning the network, probing every address in the range\u{2026}"
+            }
             div id="discover-results" {}
         }
     }

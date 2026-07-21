@@ -191,5 +191,11 @@ pub async fn add(
     }
     state.notify();
     let id = device_id(&device.host);
-    Ok(html! { li id=(format!("discover-row-{id}")) { (device.name) " added." } })
+    Ok(html! {
+        li.discover-added id=(format!("discover-row-{id}")) {
+            span.discover-check aria-hidden="true" { "\u{2713}" }
+            span { strong { (device.name) } " added to the fleet" }
+            a href="/" { "View on dashboard" }
+        }
+    })
 }

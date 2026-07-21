@@ -45,7 +45,7 @@ async fn device_host_and_name(
     let fleet = state.inner.fleet.read().await;
     let dev = fleet
         .get(id)
-        .ok_or_else(|| AppError::NotFound(id.to_string()))?;
+        .ok_or_else(|| AppError::NotFound(format!("Device {id} is not configured.")))?;
     Ok((dev.host.clone(), dev.display_name().to_string(), dev.vendor))
 }
 
@@ -314,7 +314,12 @@ pub async fn firmware_update(
     let url = form.url.filter(|u| !u.is_empty());
     ops::firmware_update(client.as_ref(), &target, url.as_deref()).await?;
     Ok(html! {
-        (admin_result(html! { p { "Firmware update started." } }))
+        (admin_result(html! {
+            p.result-note {
+                span.callout-check aria-hidden="true" { "\u{2713}" }
+                " Firmware update started. The device installs it and reboots; expect it to show offline for a minute."
+            }
+        }))
         (close_modal())
     }
     .into_response())

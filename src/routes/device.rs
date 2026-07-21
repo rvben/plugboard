@@ -24,7 +24,7 @@ pub async fn detail(
     let fleet = state.inner.fleet.read().await;
     let dev = fleet
         .get(&id)
-        .ok_or_else(|| AppError::NotFound(id.clone()))?;
+        .ok_or_else(|| AppError::NotFound(format!("Device {id} is not configured.")))?;
     Ok(layout::page(
         dev.display_name(),
         &csrf.0,

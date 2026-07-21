@@ -856,11 +856,6 @@ a.update-tag:hover {
   color: var(--accent);
 }
 
-.update-callout .callout-check {
-  color: var(--on-solid);
-  font-weight: 700;
-}
-
 .update-callout .callout-sub {
   color: var(--muted);
   font-size: var(--text-sm);
@@ -1505,6 +1500,14 @@ dd {
   margin: 0;
 }
 
+/* Why an unreachable device is unreachable, right in the hero. */
+.offline-reason {
+  color: var(--offline);
+  font-size: var(--text-sm);
+  margin: var(--space-3) 0 0;
+  overflow-wrap: anywhere;
+}
+
 /* The energy cluster: live draw + its recent shape on the left, meter stats
    on the right. */
 .energy-cluster {
@@ -1636,6 +1639,20 @@ dd {
   display: none;
 }
 
+/* A successful admin action's confirmation line. */
+.result-note {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  max-width: 44rem;
+  padding: var(--space-3) var(--space-4);
+  background: color-mix(in oklab, var(--on-solid) 7%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--on-solid) 30%, transparent);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  margin: 0;
+}
+
 /* The console log: a terminal. Deliberately dark in BOTH themes (a terminal
    is its own surface), scrolling, pinned to the newest entry by app.js. */
 .console-log {
@@ -1702,6 +1719,61 @@ dd {
   border-radius: var(--radius-lg);
   padding: var(--space-4);
   max-width: 42rem;
+}
+
+/* The in-flight scan state: htmx puts `htmx-request` on this element (the
+   form's hx-indicator) for the seconds a network sweep takes. */
+.scan-indicator {
+  display: none;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  padding: var(--space-4) var(--space-1);
+}
+
+.scan-indicator.htmx-request {
+  display: flex;
+}
+
+.scan-spinner {
+  width: 0.9em;
+  height: 0.9em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+  flex: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .scan-spinner {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
+/* A freshly added device's confirmation row. */
+.discover-added {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: color-mix(in oklab, var(--on-solid) 7%, var(--surface));
+  border: 1px solid color-mix(in oklab, var(--on-solid) 30%, transparent);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-2);
+}
+
+.discover-added a {
+  margin-left: auto;
+  font-weight: 600;
+}
+
+.discover-check,
+.callout-check {
+  color: var(--on-solid);
+  font-weight: 700;
 }
 
 .discover-results-list li {
@@ -1848,6 +1920,44 @@ dd {
   border-radius: var(--radius-sm);
   padding: var(--space-2) var(--space-3);
   font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+/* ---------- Error page ---------- */
+
+.error-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  text-align: center;
+  padding: var(--space-8) var(--space-4);
+}
+
+.error-page svg {
+  color: var(--border-strong);
+}
+
+.error-page .error-code {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  color: var(--muted);
+  margin: var(--space-2) 0 0;
+}
+
+.error-page h1 {
+  margin: 0;
+}
+
+.error-page .hint {
+  max-width: 60ch;
+  overflow-wrap: anywhere;
+}
+
+.error-page .error-home {
+  margin-top: var(--space-3);
   font-weight: 600;
 }
 

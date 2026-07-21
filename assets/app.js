@@ -115,6 +115,22 @@
       }
     });
 
+    // Like a real terminal: once a command has actually produced a log
+    // entry, clear the input and refocus it for the next command. Gated
+    // commands (confirm modal, no entry yet) keep the input as typed.
+    document.body.addEventListener("htmx:afterRequest", function (evt) {
+      var elt = evt.detail.elt;
+      if (!elt || !elt.matches || !elt.matches(".admin-console form")) return;
+      if (!evt.detail.successful) return;
+      var xhr = evt.detail.xhr;
+      if (!xhr || (xhr.responseText || "").indexOf("console-entry") === -1) return;
+      var input = elt.querySelector("input[name=command]");
+      if (input) {
+        input.value = "";
+        input.focus();
+      }
+    });
+
     // Chart hover: a crosshair plus the exact sample value and age, read
     // from the data-* attributes the server rendered alongside the SVG. A
     // gap sample honestly reads "no reading", never zero.

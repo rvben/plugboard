@@ -64,6 +64,9 @@ pub fn router(state: AppState, secure: bool) -> Router {
         .route("/settings/poll-interval", post(settings::poll_interval))
         .route("/modal/close", get(dashboard::modal_close))
         .route("/logout", post(auth::logout))
+        // Unknown paths get a real 404 (the error-page middleware styles it
+        // for browser navigations) instead of axum's blank default.
+        .fallback(not_found)
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::auth::require_auth,
@@ -80,7 +83,15 @@ pub fn router(state: AppState, secure: bool) -> Router {
         .merge(public_auth_router)
         .layer(middleware::from_fn(crate::auth::csrf_and_origin))
         .layer(crate::auth::session_layer(secure))
+        // Outermost within the app tier, so it also styles errors produced
+        // by the CSRF/session layers; assets and metrics stay outside.
+        .layer(middleware::from_fn(crate::error::html_error_pages))
         .with_state(state)
         .merge(Router::new().route("/assets/:file", get(assets_route::serve)))
         .merge(metrics_router)
+}
+
+/// Fallback for paths no route matches.
+async fn not_found() -> crate::error::AppError {
+    crate::error::AppError::NotFound("There is no page at this address.".into())
 }

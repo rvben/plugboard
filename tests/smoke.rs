@@ -1,4 +1,57 @@
 use std::io::Write;
+use std::path::PathBuf;
+
+use http_body_util::BodyExt;
+use tower::ServiceExt;
+
+/// Error presentation is content-negotiated: a browser navigation to a
+/// missing page gets the styled HTML error page (never a blank window or
+/// bare text), while an htmx request keeps its concise plain-text body for
+/// the toast layer.
+#[tokio::test]
+async fn errors_render_html_pages_for_navigations_and_text_for_htmx() {
+    let state = plugboard::state::AppState::new(
+        plugboard::config::Config::default(),
+        PathBuf::from("unused.toml"),
+    );
+    let app = plugboard::routes::router(state, false);
+
+    let nav = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/no-such-page")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(nav.status(), axum::http::StatusCode::NOT_FOUND);
+    let body = nav.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        body.contains("<html") && body.contains("Not found"),
+        "a navigation 404 must be a styled page, got: {body}"
+    );
+
+    let htmx = app
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/no-such-page")
+                .header("hx-request", "true")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(htmx.status(), axum::http::StatusCode::NOT_FOUND);
+    let body = htmx.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        !body.contains("<html"),
+        "an htmx error must stay plain text for the toast layer, got: {body}"
+    );
+}
 
 #[test]
 fn config_default_has_loopback_bind() {
