@@ -113,6 +113,10 @@
   box-sizing: border-box;
 }
 
+/* No `scroll-behavior: smooth` here: environments that don't tick scroll
+   animations (verified against a driven Chrome) turn a smooth anchor jump
+   into NO jump at all. The instant native jump works everywhere; the
+   `scroll-margin-top` on the targets keeps it clear of the topbar. */
 html {
   -webkit-text-size-adjust: 100%;
 }
@@ -720,10 +724,24 @@ input.mono {
   content: none;
 }
 
-/* A confirmed-newer firmware: a quiet accent chip on cards and the System
-   panel, backed by the real target version. */
-.update-tag {
+/* Update availability. On cards: an ambient accent dot beside the name (the
+   version rides in the tooltip/aria-label) - update-ness is tertiary on the
+   dashboard, and a dot on the title line scans across a whole grid at a
+   glance. The wordy affordance lives on the detail page, where the Update
+   action is one jump away. */
+.update-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: none;
+}
+
+/* The detail page's labeled form: a small chip that links to the admin
+   panel's Update action. */
+a.update-tag {
   color: var(--accent);
+  font-family: var(--font-sans);
   font-size: var(--text-xs);
   font-weight: 650;
   border: 1px solid color-mix(in oklab, var(--accent) 40%, transparent);
@@ -731,6 +749,15 @@ input.mono {
   border-radius: var(--radius-pill);
   padding: 0.1em 0.6em;
   white-space: nowrap;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+a.update-tag:hover {
+  text-decoration: none;
+  background: color-mix(in oklab, var(--accent) 16%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 60%, transparent);
 }
 
 .update-notice {
@@ -742,6 +769,12 @@ input.mono {
 
 .stat-value.updates-count {
   color: var(--accent);
+}
+
+/* In-page jump targets (the System row's "available" chip) land clear of
+   the sticky topbar. */
+.admin-section {
+  scroll-margin-top: var(--space-8);
 }
 
 /* ---------- Dashboard: header, summary, grid ---------- */
@@ -993,6 +1026,13 @@ input.mono {
   align-items: flex-start;
   justify-content: space-between;
   gap: var(--space-2);
+}
+
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 .card-name {

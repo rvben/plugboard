@@ -13,7 +13,9 @@ use crate::views::components::{
 /// `id="card-{id}"` and `sse-swap="device-{id}"` so a later `device-{id}` SSE
 /// event can target it. `history` supplies the device's recent power samples
 /// (may be empty; the chart renders nothing until a real sample exists).
-/// `updates` marks a confirmed-newer firmware with a quiet chip.
+/// A confirmed-newer firmware shows as an ambient accent dot beside the
+/// name (the exact version rides in the tooltip/label); the wordy
+/// affordance lives on the detail page, next to the actual Update action.
 pub fn device_card(dev: &DeviceView, history: &Series, updates: &UpdatesMap) -> Markup {
     let series = history.device(&dev.id);
     let update = updates.get(&dev.id).and_then(|u| u.available.as_deref());
@@ -23,7 +25,14 @@ pub fn device_card(dev: &DeviceView, history: &Series, updates: &UpdatesMap) -> 
     html! {
         article.card.offline[!dev.is_online()] id=(format!("card-{}", dev.id)) sse-swap=(format!("device-{}", dev.id)) hx-swap="outerHTML" {
             div.card-header {
-                a.card-name href=(format!("/device/{}", dev.id)) { (dev.display_name()) }
+                div.card-title {
+                    a.card-name href=(format!("/device/{}", dev.id)) { (dev.display_name()) }
+                    @if let Some(v) = update {
+                        span.update-dot role="img"
+                            title=(format!("firmware {v} available"))
+                            aria-label=(format!("firmware {v} available")) {}
+                    }
+                }
                 div.card-state { (state_badge(dev)) }
             }
             div.card-readouts {
@@ -37,9 +46,6 @@ pub fn device_card(dev: &DeviceView, history: &Series, updates: &UpdatesMap) -> 
                 (vendor_tag(dev.vendor))
                 (signal_indicator(dev.signal()))
                 span.host title=(dev.host) { (dev.host) }
-                @if let Some(v) = update {
-                    span.update-tag title=(format!("firmware {v} is available")) { "update " (v) }
-                }
             }
             div.card-footer {
                 (relay_control(dev, ToggleTarget::Card(&dev.id)))
@@ -260,6 +266,34 @@ mod tests {
         assert!(
             !html.contains("0.0"),
             "an absent load must never be coerced to 0: {html}"
+        );
+    }
+
+    /// An available update renders as the ambient dot carrying the exact
+    /// version in its accessible label; without one there is no dot at all.
+    #[test]
+    fn card_update_dot_carries_version_and_is_absent_when_up_to_date() {
+        let dev = device("a", true, Some(10.0), Some(true));
+        let mut updates = UpdatesMap::new();
+        updates.insert(
+            "d-a".to_string(),
+            crate::updates::UpdateInfo {
+                current: "14.2.0".into(),
+                available: Some("15.5.0".into()),
+                checked_unix: 1_000,
+            },
+        );
+        let with = device_card(&dev, &Series::default(), &updates).into_string();
+        assert!(with.contains("update-dot"), "{with}");
+        assert!(
+            with.contains("firmware 15.5.0 available"),
+            "the dot must carry the exact version accessibly: {with}"
+        );
+
+        let without = device_card(&dev, &Series::default(), &UpdatesMap::new()).into_string();
+        assert!(
+            !without.contains("update-dot"),
+            "no confirmed update, no dot: {without}"
         );
     }
 

@@ -201,7 +201,8 @@ fn system_section(dev: &DeviceView, update: Option<&UpdateInfo>) -> Markup {
                     dd {
                         (na(firmware))
                         @if let Some(v) = available {
-                            " " span.update-tag { (v) " available" }
+                            // Jumps to the admin panel's Update action below.
+                            " " a.update-tag href="#admin-firmware" { (v) " available" }
                         }
                     }
                 }
@@ -322,7 +323,7 @@ fn admin_panel(dev: &DeviceView, update: Option<&UpdateInfo>) -> Markup {
                 }
             }
             @if caps.firmware_ota {
-                div.admin-section.admin-firmware {
+                div.admin-section.admin-firmware id="admin-firmware" {
                     h3 { "Firmware" }
                     p.hint { "Check the running version, or flash new firmware over the air." }
                     @if let Some(u) = update {
