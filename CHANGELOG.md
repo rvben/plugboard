@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/rvben/plugboard/compare/v0.2.0...v0.2.1) - 2026-07-21
+
+### Added
+
+- **ui**: fleet-wide power moves behind a menu, and confirms name their blast radius ([d67262d](https://github.com/rvben/plugboard/commit/d67262d76cfe0724b8af6d8be4e786e5d11c538c))
+- organize the fleet into groups with live subtotals and per-group power ([0c1096f](https://github.com/rvben/plugboard/commit/0c1096f09c1b44a1a4dcf69a6adef0e77cca9fbb))
+- Update all, opt-in auto-apply, and a native-submit safety net ([e47d343](https://github.com/rvben/plugboard/commit/e47d343847f790ebb2fc6ad52f053f66ec0fc913))
+- the firmware update follows its real lifecycle in the callout ([2493465](https://github.com/rvben/plugboard/commit/2493465aa4bb99f58204e61c84d5e7e1f49818a3))
+- **ui**: styled error pages, scan progress, and remaining rough-edge polish ([d295663](https://github.com/rvben/plugboard/commit/d2956631742a08532499c63d740c3c8b9d68349e))
+- **ui**: instant tooltip on the update dot, and a composed firmware callout ([894c43a](https://github.com/rvben/plugboard/commit/894c43afc0e3bd3e11b7a1ea00d9eba2747498f8))
+- **ui**: update availability as an ambient dot on cards, a jump-link on detail ([b6898a8](https://github.com/rvben/plugboard/commit/b6898a8095ff93edfecd6855ba7fac22cfd58996))
+- chart axis labels with hover readout, and automatic firmware update discovery ([6e5abad](https://github.com/rvben/plugboard/commit/6e5abad11c35e3524295f055e7ec75c0140d1279))
+- **ui**: live power history, instrument heroes, per-relay switches, and a console terminal ([4fd9696](https://github.com/rvben/plugboard/commit/4fd9696149816754f2eb179e1682cc803d8b9186))
+- **ui**: redesign the web UI as a coherent instrument panel ([4922c30](https://github.com/rvben/plugboard/commit/4922c30ad7a8b2a6f796fc16a9f8c6570a390237))
+
+### Fixed
+
+- **ui**: toasts name what they switched ([eb13729](https://github.com/rvben/plugboard/commit/eb13729173f025ee9c1f3302c1c288d7a2f6e7a8))
+- **auth**: answer logout with hx-redirect so the htmx sign-out button navigates ([ab7a564](https://github.com/rvben/plugboard/commit/ab7a56474c858157d6c94da28a718f0be6dd54a6))
+
+
+
 ## [0.2.0](https://github.com/rvben/plugboard/compare/v0.1.2...v0.2.0) - 2026-07-20
 
 ### Changed
