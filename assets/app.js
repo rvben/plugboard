@@ -57,8 +57,30 @@
     document.body.addEventListener("click", function (evt) {
       if (evt.target.classList.contains("modal-backdrop")) clearModal();
     });
+
+    // Dropdown menus (details.menu) close on outside click, on activating
+    // one of their actions, and on Escape - native <details> only toggles
+    // on its summary.
+    function closeMenus(except) {
+      document.querySelectorAll("details.menu[open]").forEach(function (menu) {
+        if (menu !== except) menu.removeAttribute("open");
+      });
+    }
+    document.body.addEventListener("click", function (evt) {
+      var inPanel = evt.target.closest(".menu-panel");
+      var ownMenu = evt.target.closest("details.menu");
+      if (inPanel && evt.target.closest("button")) {
+        closeMenus(null);
+      } else {
+        closeMenus(ownMenu);
+      }
+    });
+
     document.addEventListener("keydown", function (evt) {
-      if (evt.key === "Escape") clearModal();
+      if (evt.key === "Escape") {
+        clearModal();
+        closeMenus(null);
+      }
     });
 
     // When a confirm modal swaps in, move focus to its Cancel button so

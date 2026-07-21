@@ -167,18 +167,16 @@ pub async fn console(
     if needs_confirm && !confirmed {
         // `needs_confirm` already narrowed `hazard` to Destructive/RequiresConfirmation;
         // `if let` (rather than a three-arm match) avoids a dead `Hazard::Safe` branch.
-        let title = if let Hazard::Destructive(reason) = &hazard {
-            format!("Run `{}`? {reason}.", form.command)
+        let detail = if let Hazard::Destructive(reason) = &hazard {
+            format!("Destructive: {reason}.")
         } else {
-            format!(
-                "Run `{}`? Not a known-safe command; confirmation required.",
-                form.command
-            )
+            "Not a known-safe command; confirmation required.".to_string()
         };
         // Main content is empty (a beforeend swap of nothing appends
         // nothing); the modal rides along as an OOB swap into #modal.
         let modal = confirm_modal(
-            &title,
+            &format!("Run `{}`?", form.command),
+            Some(&detail),
             &format!("/device/{id}/console"),
             &[("command", &form.command)],
             "#console-log",
@@ -240,6 +238,7 @@ pub async fn config_set(
     if !confirmed {
         let modal = confirm_modal(
             &format!("Set `{}` to `{}`?", form.setting, form.value),
+            Some("This writes the device's configuration."),
             &format!("/device/{id}/config/set"),
             &[("setting", &form.setting), ("value", &form.value)],
             "#admin-result",
@@ -301,7 +300,8 @@ pub async fn firmware_update(
             _ => vec![],
         };
         let modal = confirm_modal(
-            "Flash firmware? This overwrites the device's running firmware.",
+            "Flash firmware?",
+            Some("This overwrites the device's running firmware; it installs and reboots."),
             &format!("/device/{id}/firmware/update"),
             &hidden,
             "#update-callout",

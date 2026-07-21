@@ -470,6 +470,37 @@ async fn bulk_power_requires_confirmation_before_switching_any_device() {
     );
 }
 
+/// The bulk confirm names its blast radius: the device count, and every
+/// protected device by name - protected devices are covered by the one
+/// confirmation, so they must never be silently swept up.
+#[tokio::test]
+async fn bulk_power_confirm_names_protected_devices() {
+    let server_a = MockServer::start();
+    let server_b = MockServer::start();
+    mock_status(&server_a, "OFF");
+    mock_status(&server_b, "OFF");
+    let host_a = server_a.address().to_string();
+    let host_b = server_b.address().to_string();
+
+    let mut config = config_with_many(&[host_a, host_b]);
+    config.devices[1].protected = true;
+    let state = AppState::new(config, PathBuf::from("unused.toml"));
+    let app = routes::router(state, false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    let gated = post_bulk(&app, &cookie, &token, "off", None).await;
+    assert_eq!(gated.status(), StatusCode::OK);
+    let body = body_string(gated).await;
+    assert!(
+        body.contains("Switch everything off?"),
+        "the modal asks the short question, body was: {body}"
+    );
+    assert!(
+        body.contains("2 devices will be switched, including 1 protected: Plug 1."),
+        "the detail must state the count and NAME the protected device, body was: {body}"
+    );
+}
+
 /// A group-scoped bulk action touches ONLY that group's members: the Office
 /// device is switched, the ungrouped one is never contacted, and the modal
 /// names the group.

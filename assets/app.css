@@ -94,6 +94,7 @@
 
   /* z-index scale: one place, no arbitrary values. */
   --z-topbar: 10;
+  --z-menu: 20;
   --z-modal: 40;
   --z-toast: 50;
   --z-tooltip: 60;
@@ -934,6 +935,85 @@ a.update-tag:hover {
   margin: 0;
 }
 
+/* A quiet dropdown menu (native <details>) for rare, deliberate actions.
+   The summary dresses as a button; the panel floats below, right-aligned.
+   app.js closes it on outside click, Escape, or action activation. */
+details.menu {
+  position: relative;
+}
+
+details.menu summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-4);
+  min-height: 2.25rem;
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast);
+}
+
+details.menu summary::-webkit-details-marker {
+  display: none;
+}
+
+details.menu summary::after {
+  content: "\25BE";
+  font-size: 0.75em;
+  color: var(--muted);
+}
+
+details.menu summary:hover,
+details.menu[open] summary {
+  background: var(--surface-muted);
+}
+
+.menu-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 14rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: var(--space-1);
+  display: flex;
+  flex-direction: column;
+  z-index: var(--z-menu);
+  animation: modal-in var(--transition-fast) backwards;
+}
+
+.menu-panel form {
+  margin: 0;
+}
+
+.menu-panel button {
+  width: 100%;
+  justify-content: flex-start;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-weight: 500;
+}
+
+.menu-panel button:hover {
+  background: var(--surface-muted);
+}
+
+.menu-panel button.menu-danger {
+  color: var(--offline);
+}
+
 /* ---------- Power charts ---------- */
 
 /* Server-rendered power history. The SVG stretches to its box
@@ -1490,6 +1570,15 @@ a.update-tag:hover {
 
 .modal h2 {
   margin-top: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The informed-consent line: blast radius, protected devices, the reason a
+   command is dangerous. */
+.modal-detail {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  margin: calc(-1 * var(--space-2)) 0 0;
   overflow-wrap: anywhere;
 }
 

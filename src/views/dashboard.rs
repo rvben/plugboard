@@ -267,6 +267,12 @@ pub fn grid(fleet: &Fleet, history: &Series, updates: &UpdatesMap) -> Markup {
 /// always confirms first, so the initial response is a re-rendered
 /// (unchanged) grid plus an OOB confirm modal, never a direct write.
 ///
+/// The fleet-wide power actions live behind a quiet "Fleet power" menu, not
+/// as bare header buttons: switching EVERYTHING is a rare, deliberate act
+/// (the per-group controls cover the everyday cases), so the global
+/// sledgehammer takes one extra, intentional step - and its confirm modal
+/// then names the full blast radius, protected devices included.
+///
 /// These deliberately live OUTSIDE the SSE-swapped `#grid`: a primary
 /// action inside a node that is replaced every poll tick can be swapped out
 /// mid-click. The Update all button's count is a page-load snapshot; the
@@ -290,13 +296,18 @@ fn bulk_controls(fleet: &Fleet, updates: &UpdatesMap) -> Markup {
                             }
                         }
                     }
-                    form hx-post="/devices/power" hx-target="#grid" hx-swap="outerHTML" {
-                        input type="hidden" name="action" value="off";
-                        button type="submit" { "All off" }
-                    }
-                    form hx-post="/devices/power" hx-target="#grid" hx-swap="outerHTML" {
-                        input type="hidden" name="action" value="on";
-                        button type="submit" { "All on" }
+                    details.menu {
+                        summary { "Fleet power" }
+                        div.menu-panel {
+                            form hx-post="/devices/power" hx-target="#grid" hx-swap="outerHTML" {
+                                input type="hidden" name="action" value="on";
+                                button type="submit" { "Switch everything on" }
+                            }
+                            form hx-post="/devices/power" hx-target="#grid" hx-swap="outerHTML" {
+                                input type="hidden" name="action" value="off";
+                                button type="submit" class="menu-danger" { "Switch everything off" }
+                            }
+                        }
                     }
                 }
             }

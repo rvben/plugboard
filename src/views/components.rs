@@ -351,14 +351,17 @@ fn toggle_control(
 }
 
 /// A confirmation modal, rendered as an OUT-OF-BAND swap into the layout's `#modal`
-/// placeholder, so opening it never disturbs the page or the card. The confirm form
-/// re-posts `action` with `confirmed=true` plus `hidden` (the original validated
-/// payload) and applies the response to `target` with `swap` (e.g. the card
-/// `#card-{id}` with `outerHTML`, or the console log `#console-log` with
-/// `beforeend`). Values are auto-escaped by maud. NEVER pass credentials
-/// through here.
+/// placeholder, so opening it never disturbs the page or the card. `title`
+/// is the short question; `detail` (when given) is the informed-consent
+/// line - the blast radius, the protected devices included, the reason a
+/// command is dangerous. The confirm form re-posts `action` with
+/// `confirmed=true` plus `hidden` (the original validated payload) and
+/// applies the response to `target` with `swap` (e.g. the card `#card-{id}`
+/// with `outerHTML`, or the console log `#console-log` with `beforeend`).
+/// Values are auto-escaped by maud. NEVER pass credentials through here.
 pub fn confirm_modal(
     title: &str,
+    detail: Option<&str>,
     action: &str,
     hidden: &[(&str, &str)],
     target: &str,
@@ -369,6 +372,9 @@ pub fn confirm_modal(
             div.modal-backdrop {
                 div.modal role="dialog" aria-modal="true" aria-labelledby="modal-title" {
                     h2 id="modal-title" { (title) }
+                    @if let Some(detail) = detail {
+                        p.modal-detail { (detail) }
+                    }
                     form hx-post=(action) hx-target=(target) hx-swap=(swap) {
                         input type="hidden" name="confirmed" value="true";
                         @for (k, v) in hidden {

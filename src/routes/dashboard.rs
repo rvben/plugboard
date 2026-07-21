@@ -81,6 +81,7 @@ pub async fn toggle(
         }
         let modal = confirm_modal(
             &format!("Switch {}?", dev.display_name()),
+            Some("This device is marked protected, so switching it asks first."),
             &format!("/device/{id}/toggle"),
             &hidden,
             &format!("#card-{id}"),
@@ -168,8 +169,11 @@ pub async fn updates_apply_all(
         }
         let modal = confirm_modal(
             &format!(
-                "Update {count} device{} to newer firmware? Each installs it and reboots.",
+                "Update {count} device{}?",
                 if count == 1 { "" } else { "s" }
+            ),
+            Some(
+                "Each device installs its new firmware and reboots; the callouts and cards follow along.",
             ),
             "/updates/apply-all",
             &[],
@@ -200,6 +204,36 @@ pub async fn updates_apply_all(
         (note_toast(&message))
     }
     .into_response())
+}
+
+/// The informed-consent line for a bulk power confirm: how many devices are
+/// in the blast radius, and WHICH of them are protected (protected devices
+/// are covered by this one confirmation, so they are named, never silently
+/// swept up; long lists are capped with a count).
+fn bulk_blast_radius(affected: &[&crate::fleet::DeviceView]) -> String {
+    let total = affected.len();
+    let mut detail = format!(
+        "{total} device{} will be switched",
+        if total == 1 { "" } else { "s" }
+    );
+    let protected: Vec<&str> = affected
+        .iter()
+        .filter(|d| d.protected)
+        .map(|d| d.display_name())
+        .collect();
+    if !protected.is_empty() {
+        let shown = protected[..protected.len().min(4)].join(", ");
+        let rest = protected.len().saturating_sub(4);
+        detail.push_str(&format!(
+            ", including {} protected: {shown}",
+            protected.len()
+        ));
+        if rest > 0 {
+            detail.push_str(&format!(", and {rest} more"));
+        }
+    }
+    detail.push('.');
+    detail
 }
 
 #[derive(Deserialize)]
@@ -245,15 +279,40 @@ pub async fn bulk_power(
         let series = history::snapshot(&state.inner.history);
         let upds = crate::updates::snapshot(&state.inner.updates);
         let fleet = state.inner.fleet.read().await;
+        let affected: Vec<&crate::fleet::DeviceView> = fleet
+            .devices
+            .iter()
+            .filter(|d| match group.as_deref() {
+                Some(g) => d.group.as_deref().map(str::trim) == Some(g),
+                None => true,
+            })
+            .collect();
+        // A stale group button (group emptied meanwhile): nothing to
+        // confirm, say so instead of asking about zero devices.
+        if affected.is_empty() {
+            return Ok(html! {
+                (dashboard::grid(&fleet, &series, &upds))
+                (note_toast("Nothing to switch."))
+            }
+            .into_response());
+        }
         let title = match group.as_deref() {
             Some(g) => format!("Switch everything in {g} {}?", form.action),
-            None => format!("Switch all devices {}?", form.action),
+            None => format!("Switch everything {}?", form.action),
         };
+        let detail = bulk_blast_radius(&affected);
         let mut hidden: Vec<(&str, &str)> = vec![("action", &form.action)];
         if let Some(g) = group.as_deref() {
             hidden.push(("group", g));
         }
-        let modal = confirm_modal(&title, "/devices/power", &hidden, "#grid", "outerHTML");
+        let modal = confirm_modal(
+            &title,
+            Some(&detail),
+            "/devices/power",
+            &hidden,
+            "#grid",
+            "outerHTML",
+        );
         return Ok(html! { (dashboard::grid(&fleet, &series, &upds)) (modal) }.into_response());
     }
 
