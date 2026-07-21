@@ -348,6 +348,101 @@ fn system_section(dev: &DeviceView, update: Option<&UpdateInfo>) -> Markup {
     }
 }
 
+/// The plugboard-side context `device_settings_panel` needs beyond the
+/// `DeviceView`: whether a credential is stored (the password itself is
+/// write-only and NEVER rendered), and the fleet's existing group names for
+/// the autocomplete datalist.
+pub struct SettingsCtx {
+    pub has_credential: bool,
+    pub group_names: Vec<String>,
+}
+
+/// How plugboard treats this device - name, group, stored credential,
+/// protected flag. These live in plugboard's own config (nothing here is
+/// written to the device; that is the Admin panel's job), which the hint
+/// states outright so the two kinds of "settings" never blur. Every form
+/// re-renders this panel in place and carries `refreshes-live`, so a rename
+/// or regroup shows up in the hero (and, via the notify, on the dashboard)
+/// immediately.
+pub fn device_settings_panel(dev: &DeviceView, ctx: &SettingsCtx) -> Markup {
+    let id = &dev.id;
+    html! {
+        section.panel.device-settings id="device-settings" {
+            h2 { "Device settings" }
+            p.hint {
+                "How plugboard shows and guards this device. Stored in plugboard's own config; nothing here changes the device itself."
+            }
+            datalist id="group-names" {
+                @for g in &ctx.group_names {
+                    option value=(g) {}
+                }
+            }
+            div.device-forms {
+                form.refreshes-live hx-post="/settings/device/rename" hx-target="#device-settings" hx-swap="outerHTML" {
+                    input type="hidden" name="host" value=(dev.host);
+                    div.field {
+                        label for=(format!("name-{id}")) { "Name" }
+                        input type="text" id=(format!("name-{id}")) name="name" value=(dev.name) required;
+                    }
+                    button type="submit" { "Rename" }
+                }
+                form.refreshes-live hx-post="/settings/device/group" hx-target="#device-settings" hx-swap="outerHTML" {
+                    input type="hidden" name="host" value=(dev.host);
+                    div.field {
+                        label for=(format!("group-{id}")) { "Group" }
+                        input type="text" id=(format!("group-{id}")) name="group"
+                            value=[dev.group.as_deref()] placeholder="e.g. Living room" list="group-names";
+                    }
+                    button type="submit" { "Save" }
+                }
+                form hx-post="/settings/device/credentials" hx-target="#device-settings" hx-swap="outerHTML" {
+                    input type="hidden" name="host" value=(dev.host);
+                    div.field {
+                        label for=(format!("password-{id}")) {
+                            "Device password"
+                            @if ctx.has_credential {
+                                " " span.badge.credential-set { "set" }
+                            }
+                        }
+                        input type="password" id=(format!("password-{id}")) name="password"
+                            placeholder="Blank clears it" autocomplete="new-password";
+                    }
+                    button type="submit" { "Save" }
+                }
+                form hx-post="/settings/device/protected" hx-target="#device-settings" hx-swap="outerHTML" {
+                    input type="hidden" name="host" value=(dev.host);
+                    label {
+                        input type="checkbox" name="protected" value="true" checked[dev.protected];
+                        "Protected (require confirmation for writes)"
+                    }
+                    button type="submit" { "Save" }
+                }
+            }
+        }
+    }
+}
+
+/// The danger zone: remove this device from plugboard. Confirm-gated, and
+/// the copy is honest about scope - only plugboard's record is removed, the
+/// device itself is untouched and can be re-added from Discover. The hint
+/// deliberately says "this device" rather than the name: a rename swaps only
+/// `#device-settings`, so a name baked in here would go stale. The confirm
+/// modal, rendered fresh per request, names the device precisely.
+pub fn remove_panel(dev: &DeviceView) -> Markup {
+    html! {
+        section.panel.danger-panel id="device-remove" {
+            h2 { "Remove device" }
+            p.hint {
+                "Removes this device from plugboard only - the device itself is not touched. Its stored name, group, credential, and history are forgotten; you can add it again from Discover."
+            }
+            form hx-post="/settings/device/remove" hx-target="#device-remove" hx-swap="outerHTML" {
+                input type="hidden" name="host" value=(dev.host);
+                button type="submit" class="btn-danger" { "Remove from plugboard" }
+            }
+        }
+    }
+}
+
 /// Wraps admin-panel output in its single shared `#admin-result` region
 /// (config get/set and firmware check/update results). Every route response
 /// targeting it - a rendered result, an empty gated placeholder, or nothing
@@ -501,6 +596,7 @@ pub fn device_page(
     poll_secs: u64,
     history: &Series,
     update: Option<&UpdateInfo>,
+    settings: &SettingsCtx,
 ) -> Markup {
     html! {
         div.device-detail {
@@ -518,6 +614,10 @@ pub fn device_page(
                 }
             }
             div id="admin-panel" { (admin_panel(dev, update)) }
+            // Plugboard-side settings and the danger zone sit OUTSIDE the
+            // live region: a poll refresh must never wipe a half-typed name.
+            (device_settings_panel(dev, settings))
+            (remove_panel(dev))
         }
     }
 }

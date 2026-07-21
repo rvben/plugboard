@@ -13,6 +13,7 @@
 
 use axum::Form;
 use axum::extract::State;
+use axum::response::IntoResponse;
 use maud::Markup;
 use serde::Deserialize;
 
@@ -37,14 +38,49 @@ pub async fn index(State(state): State<AppState>, csrf: Csrf) -> Markup {
     )
 }
 
-/// Re-renders the `#settings-page` fragment from the current config. Every
-/// POST handler below returns this, so the swapped-in markup always reflects
-/// the config as it stands after that handler's mutation (or after a
-/// rollback, if the save failed and the handler already returned an error
-/// instead of calling this).
+/// Re-renders the `#settings-page` fragment from the current config (the
+/// app-level handlers below return this, so the swapped-in markup always
+/// reflects the config as it stands after the mutation - or after a
+/// rollback, if the save failed and the handler already returned an error).
 async fn render_fragment(state: &AppState) -> Markup {
     let config = state.inner.config.read().await;
     settings::settings_page(&config)
+}
+
+/// Re-renders one device's settings panel (`#device-settings`) from the
+/// current config + fleet - the swap target every per-device settings form
+/// on the detail page uses.
+async fn device_settings_fragment(state: &AppState, host: &str) -> Result<Markup, AppError> {
+    let (has_credential, group_names) = {
+        let config = state.inner.config.read().await;
+        let has_credential = config
+            .devices
+            .iter()
+            .find(|d| d.host == host)
+            .is_some_and(|d| d.password.is_some());
+        let mut group_names: Vec<String> = config
+            .devices
+            .iter()
+            .filter_map(|d| d.group.as_deref())
+            .map(str::trim)
+            .filter(|g| !g.is_empty())
+            .map(str::to_string)
+            .collect();
+        group_names.sort_unstable();
+        group_names.dedup();
+        (has_credential, group_names)
+    };
+    let fleet = state.inner.fleet.read().await;
+    let dev = fleet
+        .get(&device_id(host))
+        .ok_or_else(|| AppError::NotFound(format!("Device {host} is not configured.")))?;
+    Ok(crate::views::device::device_settings_panel(
+        dev,
+        &crate::views::device::SettingsCtx {
+            has_credential,
+            group_names,
+        },
+    ))
 }
 
 #[derive(Deserialize)]
@@ -86,21 +122,46 @@ pub async fn rename(
         }
     }
     state.notify();
-    Ok(render_fragment(&state).await)
+    device_settings_fragment(&state, &form.host).await
 }
 
 #[derive(Deserialize)]
 pub struct RemoveForm {
     host: String,
+    confirmed: Option<String>,
 }
 
-/// `POST /settings/device/remove` - drop a device from config and fleet. The
-/// removed `DeviceConfig` is held so it can be reinserted if `save_config`
-/// fails, exactly like `routes::discover::add`'s rollback for a failed push.
+/// `POST /settings/device/remove` - drop a device from config and fleet.
+/// Confirm-gated (removal forgets the stored name, group, credential, and
+/// history); the confirmed response navigates back to the dashboard via
+/// `hx-redirect`, since the device's own page no longer exists. The removed
+/// `DeviceConfig` is held so it can be reinserted if `save_config` fails,
+/// exactly like `routes::discover::add`'s rollback for a failed push.
 pub async fn remove(
     State(state): State<AppState>,
     Form(form): Form<RemoveForm>,
-) -> Result<Markup, AppError> {
+) -> Result<axum::response::Response, AppError> {
+    if form.confirmed.as_deref() != Some("true") {
+        let fleet = state.inner.fleet.read().await;
+        let dev = fleet.get(&device_id(&form.host)).ok_or_else(|| {
+            AppError::NotFound(format!("Device {} is not configured.", form.host))
+        })?;
+        let modal = crate::views::components::confirm_modal(
+            &format!("Remove {} from plugboard?", dev.display_name()),
+            Some(
+                "The device itself is not touched; its stored settings and history are forgotten. You can add it again from Discover.",
+            ),
+            "/settings/device/remove",
+            &[("host", &form.host)],
+            "#device-remove",
+            "outerHTML",
+        );
+        return Ok(maud::html! {
+            (crate::views::device::remove_panel(dev))
+            (modal)
+        }
+        .into_response());
+    }
     let removed = {
         let mut cfg = state.inner.config.write().await;
         let idx = cfg
@@ -121,7 +182,11 @@ pub async fn remove(
         fleet.devices.retain(|d| d.id != id);
     }
     state.notify();
-    Ok(render_fragment(&state).await)
+    let mut response = axum::http::StatusCode::OK.into_response();
+    response
+        .headers_mut()
+        .insert("hx-redirect", axum::http::HeaderValue::from_static("/"));
+    Ok(response)
 }
 
 #[derive(Deserialize)]
@@ -163,7 +228,7 @@ pub async fn credentials(
         }
         return Err(AppError::Internal(e.to_string()));
     }
-    Ok(render_fragment(&state).await)
+    device_settings_fragment(&state, &form.host).await
 }
 
 #[derive(Deserialize)]
@@ -213,7 +278,7 @@ pub async fn protected(
         }
     }
     state.notify();
-    Ok(render_fragment(&state).await)
+    device_settings_fragment(&state, &form.host).await
 }
 
 #[derive(Deserialize)]
@@ -268,7 +333,7 @@ pub async fn group(
         }
     }
     state.notify();
-    Ok(render_fragment(&state).await)
+    device_settings_fragment(&state, &form.host).await
 }
 
 #[derive(Deserialize)]

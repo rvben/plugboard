@@ -13,8 +13,29 @@
 use maud::{Markup, html};
 
 use crate::config::{AuthConfig, AuthMode, Config, DeviceConfig, UpdatesConfig};
-use crate::fleet::device_id;
-use crate::views::components::vendor_tag;
+
+/// Per-device settings live on each device's own page (name, group,
+/// credential, protection, removal) - everything about ONE device in one
+/// place. This section just points there, and to Discover for adding.
+fn devices_pointer(devices: &[DeviceConfig]) -> Markup {
+    let count = devices.len();
+    html! {
+        section.panel.settings-devices {
+            h2 { "Devices" }
+            p.hint {
+                @if count == 0 {
+                    "No devices yet. Add one from " a href="/discover" { "Discover" } "."
+                } @else {
+                    (count) " device" (if count == 1 { "" } else { "s" }) " configured. Each device's name, group, credential, and protection are managed on its own page - open it from the "
+                    a href="/" { "dashboard" }
+                    ". Add more from "
+                    a href="/discover" { "Discover" }
+                    "."
+                }
+            }
+        }
+    }
+}
 
 fn updates_section(updates: &UpdatesConfig) -> Markup {
     html! {
@@ -85,97 +106,6 @@ fn poll_interval_section(secs: u64) -> Markup {
     }
 }
 
-fn device_row(d: &DeviceConfig) -> Markup {
-    let id = device_id(&d.host);
-    html! {
-        li.settings-device id=(format!("settings-device-{id}")) {
-            div.device-summary {
-                span.device-name { (d.name) }
-                span.device-host { (d.host) }
-                (vendor_tag(d.vendor))
-                @if d.password.is_some() {
-                    span.badge.credential-set { "credential set" }
-                }
-                form.settings-remove hx-post="/settings/device/remove" hx-target="#settings-page" hx-swap="outerHTML" {
-                    input type="hidden" name="host" value=(d.host);
-                    button type="submit" class="btn-danger" { "Remove" }
-                }
-            }
-            div.device-forms {
-                form.settings-rename hx-post="/settings/device/rename" hx-target="#settings-page" hx-swap="outerHTML" {
-                    input type="hidden" name="host" value=(d.host);
-                    div.field {
-                        label for=(format!("name-{id}")) { "Name" }
-                        input type="text" id=(format!("name-{id}")) name="name" value=(d.name) required;
-                    }
-                    button type="submit" { "Rename" }
-                }
-                form.settings-group hx-post="/settings/device/group" hx-target="#settings-page" hx-swap="outerHTML" {
-                    input type="hidden" name="host" value=(d.host);
-                    div.field {
-                        label for=(format!("group-{id}")) { "Group" }
-                        input type="text" id=(format!("group-{id}")) name="group"
-                            value=[d.group.as_deref()] placeholder="e.g. Living room" list="group-names";
-                    }
-                    button type="submit" { "Save" }
-                }
-                form.settings-credentials hx-post="/settings/device/credentials" hx-target="#settings-page" hx-swap="outerHTML" {
-                    input type="hidden" name="host" value=(d.host);
-                    div.field {
-                        label for=(format!("password-{id}")) { "Device password" }
-                        input type="password" id=(format!("password-{id}")) name="password"
-                            placeholder="Blank clears it" autocomplete="new-password";
-                    }
-                    button type="submit" { "Save credential" }
-                }
-                form.settings-protected hx-post="/settings/device/protected" hx-target="#settings-page" hx-swap="outerHTML" {
-                    input type="hidden" name="host" value=(d.host);
-                    label {
-                        input type="checkbox" name="protected" value="true" checked[d.protected];
-                        "Protected (require confirmation for writes)"
-                    }
-                    button type="submit" { "Save" }
-                }
-            }
-        }
-    }
-}
-
-fn devices_section(devices: &[DeviceConfig]) -> Markup {
-    // Existing group names as autocomplete suggestions, so a fleet's rooms
-    // stay consistently spelled without restricting free-form entry.
-    let mut group_names: Vec<&str> = devices
-        .iter()
-        .filter_map(|d| d.group.as_deref())
-        .map(str::trim)
-        .filter(|g| !g.is_empty())
-        .collect();
-    group_names.sort_unstable();
-    group_names.dedup();
-    html! {
-        section.settings-devices {
-            h2 { "Devices" }
-            datalist id="group-names" {
-                @for g in &group_names {
-                    option value=(g) {}
-                }
-            }
-            @if devices.is_empty() {
-                p.empty {
-                    strong { "No devices configured" }
-                    span { "Add one from " a href="/discover" { "Discover" } "." }
-                }
-            } @else {
-                ul.settings-device-list {
-                    @for d in devices {
-                        (device_row(d))
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// The full `/settings` content (without the page shell -
 /// `routes::settings::index` wraps it with `layout::page`). Every POST
 /// handler in `routes::settings` returns this same fragment, re-derived from
@@ -187,7 +117,7 @@ pub fn settings_page(config: &Config) -> Markup {
             header.page-header {
                 h1 { "Settings" }
             }
-            (devices_section(&config.devices))
+            (devices_pointer(&config.devices))
             (updates_section(&config.updates))
             (poll_interval_section(config.poll_interval_secs))
             (auth_section(&config.auth))

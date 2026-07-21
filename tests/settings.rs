@@ -1,8 +1,10 @@
-//! Integration tests for the settings page (Task 10): rename/remove/
-//! credentials/protected/poll-interval handlers, all through the REAL
-//! router (session + CSRF/same-origin middleware included), plus the
-//! non-vacuous proof that a stored device password and the auth
-//! `password_hash` are never rendered into `GET /settings` HTML.
+//! Integration tests for the settings handlers (Task 10): rename/remove/
+//! credentials/protected/poll-interval, all through the REAL router
+//! (session + CSRF/same-origin middleware included). Per-device settings
+//! now live on the device detail page (`GET /device/:id`), so the
+//! non-vacuous never-rendered proofs for a stored device password cover
+//! BOTH that page and `GET /settings`; the auth `password_hash` proof
+//! covers `GET /settings`.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -265,6 +267,28 @@ async fn credentials_are_stored_but_never_rendered_in_get() {
         "the POST /settings/device/credentials response must not echo the password, got: {post_body}"
     );
 
+    // The device detail page carries the settings panel now - it must know a
+    // credential exists (the badge) without ever rendering the value.
+    let detail = get_route(&app, &cookie, &format!("/device/{}", device_id(host))).await;
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail_body = body_string(detail).await;
+    assert!(
+        !detail_body.contains(secret),
+        "GET /device/:id must never render a stored device password, got: {detail_body}"
+    );
+    // Non-vacuous: the settings panel itself is present, so the missing
+    // secret isn't just an empty/broken page.
+    assert!(
+        detail_body.contains("Device settings"),
+        "got: {detail_body}"
+    );
+    assert!(detail_body.contains(host), "got: {detail_body}");
+    // The credential badge proves the page KNOWS a password exists,
+    // without revealing it.
+    assert!(detail_body.contains("credential-set"), "got: {detail_body}");
+
+    // The settings page no longer lists devices at all - and certainly
+    // never the secret.
     let get_response = get_route(&app, &cookie, "/settings").await;
     assert_eq!(get_response.status(), StatusCode::OK);
     let get_body = body_string(get_response).await;
@@ -272,13 +296,6 @@ async fn credentials_are_stored_but_never_rendered_in_get() {
         !get_body.contains(secret),
         "GET /settings must never render a stored device password, got: {get_body}"
     );
-    // Non-vacuous: the device row itself is present, so the missing secret
-    // isn't just an empty/broken page.
-    assert!(get_body.contains("Plug"), "got: {get_body}");
-    assert!(get_body.contains(host), "got: {get_body}");
-    // The "credential set" badge proves the page KNOWS a password exists,
-    // without revealing it.
-    assert!(get_body.contains("credential set"), "got: {get_body}");
 
     let _ = std::fs::remove_file(&path);
 }
@@ -314,10 +331,11 @@ async fn credentials_empty_submission_clears_password() {
 // remove
 // ---------------------------------------------------------------------------
 
-/// POSTing a remove drops the device from both config and fleet.
+/// An unconfirmed remove returns the confirm modal and removes NOTHING -
+/// the destructive path is reachable only with `confirmed=true`.
 #[tokio::test]
-async fn remove_drops_device_from_config_and_fleet() {
-    let path = temp_config_path("remove");
+async fn remove_without_confirmation_returns_modal_and_removes_nothing() {
+    let path = temp_config_path("remove-unconfirmed");
     let host = "192.0.2.8";
     let config = config_with(vec![device(host, "Plug")]);
     let state = AppState::new(config, path.clone());
@@ -333,6 +351,59 @@ async fn remove_drops_device_from_config_and_fleet() {
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
+    let body = body_string(response).await;
+    assert!(
+        body.contains("Remove Plug from plugboard?"),
+        "an unconfirmed remove must return the confirm modal, got: {body}"
+    );
+    assert!(
+        body.contains(r#"name="confirmed" value="true""#),
+        "the modal must carry the confirmed field, got: {body}"
+    );
+
+    let cfg = state.inner.config.read().await;
+    assert_eq!(
+        cfg.devices.len(),
+        1,
+        "nothing may be removed without confirmation"
+    );
+    drop(cfg);
+    let fleet = state.inner.fleet.read().await;
+    assert_eq!(fleet.devices.len(), 1);
+    drop(fleet);
+    let _ = std::fs::remove_file(&path);
+}
+
+/// POSTing a confirmed remove drops the device from both config and fleet,
+/// and redirects the browser to the dashboard (the removed device's page no
+/// longer exists).
+#[tokio::test]
+async fn remove_drops_device_from_config_and_fleet() {
+    let path = temp_config_path("remove");
+    let host = "192.0.2.8";
+    let config = config_with(vec![device(host, "Plug")]);
+    let state = AppState::new(config, path.clone());
+    let app = routes::router(state.clone(), false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    let response = post_form(
+        &app,
+        &cookie,
+        &token,
+        "/settings/device/remove",
+        &format!("host={host}&confirmed=true"),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("hx-redirect")
+            .expect("a confirmed remove must hx-redirect to the dashboard")
+            .to_str()
+            .unwrap(),
+        "/"
+    );
 
     let cfg = state.inner.config.read().await;
     assert!(cfg.devices.is_empty());
@@ -373,7 +444,7 @@ async fn remove_rolls_back_on_save_failure() {
         &cookie,
         &token,
         "/settings/device/remove",
-        &format!("host={host}"),
+        &format!("host={host}&confirmed=true"),
     )
     .await;
     assert_eq!(
@@ -406,7 +477,7 @@ async fn remove_rolls_back_on_save_failure() {
         &cookie,
         &token,
         "/settings/device/remove",
-        &format!("host={host}"),
+        &format!("host={host}&confirmed=true"),
     )
     .await;
     assert_eq!(

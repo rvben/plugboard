@@ -18,7 +18,31 @@ pub async fn detail(
         active: layout::Nav::Devices,
         show_logout: state.builtin_auth().await,
     };
-    let poll_secs = state.inner.config.read().await.poll_interval_secs;
+    let (poll_secs, settings) = {
+        let config = state.inner.config.read().await;
+        let has_credential = config
+            .devices
+            .iter()
+            .find(|d| crate::fleet::device_id(&d.host) == id)
+            .is_some_and(|d| d.password.is_some());
+        let mut group_names: Vec<String> = config
+            .devices
+            .iter()
+            .filter_map(|d| d.group.as_deref())
+            .map(str::trim)
+            .filter(|g| !g.is_empty())
+            .map(str::to_string)
+            .collect();
+        group_names.sort_unstable();
+        group_names.dedup();
+        (
+            config.poll_interval_secs,
+            device::SettingsCtx {
+                has_credential,
+                group_names,
+            },
+        )
+    };
     let series = crate::history::snapshot(&state.inner.history);
     let upds = crate::updates::snapshot(&state.inner.updates);
     let fleet = state.inner.fleet.read().await;
@@ -29,6 +53,6 @@ pub async fn detail(
         dev.display_name(),
         &csrf.0,
         chrome,
-        device::device_page(dev, poll_secs, &series, upds.get(&id)),
+        device::device_page(dev, poll_secs, &series, upds.get(&id), &settings),
     ))
 }
