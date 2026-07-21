@@ -52,17 +52,44 @@ fn flush_run(
     run.clear();
 }
 
-/// Server-rendered sparkline of recent power samples as a small inline SVG.
-/// The series is right-anchored (newest sample at the right edge, history
-/// filling leftward as ticks accumulate) and scaled against its own maximum
-/// with a zero baseline, so the shape is proportional to absolute draw.
+/// Formats a wattage for an axis label or readout: "847 W", "2.09 kW".
+fn fmt_watts(w: f64) -> String {
+    if w >= 1000.0 {
+        format!("{:.2} kW", w / 1000.0)
+    } else {
+        format!("{w:.0} W")
+    }
+}
+
+/// Formats a duration in seconds as a compact span label: "45s", "5m", "1h 5m".
+pub(crate) fn fmt_span(secs: u64) -> String {
+    if secs < 90 {
+        format!("{secs}s")
+    } else if secs < 3_600 {
+        format!("{}m", secs.div_ceil(60))
+    } else {
+        format!("{}h {}m", secs / 3_600, (secs % 3_600) / 60)
+    }
+}
+
+/// Server-rendered chart of recent power samples: a stretched inline SVG plus
+/// HTML overlay labels (kept outside the SVG so the non-uniform stretch never
+/// distorts text). The y scale runs from a zero baseline to the series
+/// maximum, labeled top-left; the x axis is the real captured window, labeled
+/// "<span> ago" to "now" from the samples' own timestamps. A recessive dashed
+/// gridline marks the maximum; hovering reads the exact sample value and age
+/// (`app.js`, from the `data-*` attributes).
+///
+/// The series is right-anchored: newest sample at the right edge, history
+/// filling leftward as ticks accumulate.
 ///
 /// Honesty: `None` samples (offline / unpolled / non-metering ticks) BREAK
 /// the line into gaps - never interpolated across, never drawn as zero (a
-/// measured `0.0` IS drawn, as a line along the baseline). A series with no
+/// measured `0.0` IS drawn, as a line along the baseline, and an all-zero
+/// series gets no max label rather than a "0 W" ceiling). A series with no
 /// real sample renders nothing at all rather than a fabricated flat line.
 /// The numeric readouts remain the accessible data; the SVG is aria-hidden.
-pub fn sparkline(series: &[Option<f64>], label: &str) -> Markup {
+pub fn power_chart(series: &[Option<f64>], ticks: &[u64], label: &str) -> Markup {
     const W: f64 = 100.0;
     const H: f64 = 32.0;
     const PAD: f64 = 2.5;
@@ -86,16 +113,37 @@ pub fn sparkline(series: &[Option<f64>], label: &str) -> Markup {
         }
     }
     flush_run(&mut run, baseline, &mut lines, &mut areas);
+    let span = (ticks.len() >= 2)
+        .then(|| ticks[ticks.len() - 1].saturating_sub(ticks[0]))
+        .filter(|s| *s > 0)
+        .map(fmt_span);
+    let data_w = serde_json::to_string(series).unwrap_or_default();
+    let data_t = serde_json::to_string(ticks).unwrap_or_default();
     html! {
-        svg.sparkline viewBox=(format!("0 0 {W} {H}")) preserveAspectRatio="none" aria-hidden="true" {
-            title { (label) }
-            @for d in &areas {
-                path.spark-area d=(d) fill="currentColor" fill-opacity="0.12" stroke="none" {}
+        div.spark-chart data-w=(data_w) data-t=(data_t) data-cap=(cap) {
+            svg.sparkline viewBox=(format!("0 0 {W} {H}")) preserveAspectRatio="none" aria-hidden="true" {
+                title { (label) }
+                @if max > 0.0 {
+                    path.grid-max d=(format!("M0 {PAD:.1}L{W} {PAD:.1}")) fill="none" vector-effect="non-scaling-stroke" {}
+                }
+                path.grid-base d=(format!("M0 {baseline:.1}L{W} {baseline:.1}")) fill="none" vector-effect="non-scaling-stroke" {}
+                @for d in &areas {
+                    path.spark-area d=(d) fill="currentColor" fill-opacity="0.12" stroke="none" {}
+                }
+                @for d in &lines {
+                    path d=(d) fill="none" stroke="currentColor" stroke-width="1.5"
+                        stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" {}
+                }
             }
-            @for d in &lines {
-                path d=(d) fill="none" stroke="currentColor" stroke-width="1.5"
-                    stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" {}
+            @if max > 0.0 {
+                span.chart-max { (fmt_watts(max)) }
             }
+            @if let Some(span) = span {
+                span.chart-span { (span) " ago" }
+            }
+            span.chart-now { "now" }
+            div.chart-cursor aria-hidden="true" {}
+            div.chart-tip {}
         }
     }
 }
@@ -397,20 +445,21 @@ pub fn undo_toast(id: &str, channel: Option<u8>, new_state: &str) -> Markup {
 mod tests {
     use switchkit::{Signal, Vendor};
 
-    use super::{signal_indicator, sparkline, vendor_tag};
+    use super::{power_chart, signal_indicator, vendor_tag};
 
-    /// Count of stroked line paths (the data lines, as opposed to the soft
-    /// area fills that accompany them).
+    /// Count of stroked data-line paths (as opposed to gridlines and the soft
+    /// area fills).
     fn line_paths(html: &str) -> usize {
-        html.matches(r#"fill="none""#).count()
+        html.matches(r#"stroke="currentColor""#).count()
     }
 
     /// A gap in the series must BREAK the line (two separate paths), never be
     /// interpolated across or drawn as a zero point.
     #[test]
-    fn sparkline_renders_gaps_as_gaps_never_interpolated() {
+    fn chart_renders_gaps_as_gaps_never_interpolated() {
         let series = [Some(1.0), Some(2.0), None, Some(3.0), Some(1.0)];
-        let html = sparkline(&series, "test").into_string();
+        let ticks = [10, 20, 30, 40, 50];
+        let html = power_chart(&series, &ticks, "test").into_string();
         assert_eq!(
             line_paths(&html),
             2,
@@ -421,25 +470,45 @@ mod tests {
     /// A series with no real sample renders NOTHING - a fabricated flat line
     /// would read as "measured zero the whole time".
     #[test]
-    fn sparkline_renders_nothing_without_a_real_sample() {
-        assert_eq!(sparkline(&[], "test").into_string(), "");
-        assert_eq!(sparkline(&[None, None, None], "test").into_string(), "");
+    fn chart_renders_nothing_without_a_real_sample() {
+        assert_eq!(power_chart(&[], &[], "test").into_string(), "");
+        assert_eq!(
+            power_chart(&[None, None, None], &[10, 20, 30], "test").into_string(),
+            ""
+        );
     }
 
-    /// Real measured zeros ARE data and draw a line along the baseline.
+    /// Real measured zeros ARE data and draw a line along the baseline - but
+    /// there is no max label: a "0 W" ceiling would be a fabricated scale.
     #[test]
-    fn sparkline_draws_real_zeros() {
-        let html = sparkline(&[Some(0.0), Some(0.0)], "test").into_string();
+    fn chart_draws_real_zeros_without_a_zero_ceiling() {
+        let html = power_chart(&[Some(0.0), Some(0.0)], &[10, 20], "test").into_string();
         assert_eq!(line_paths(&html), 1, "{html}");
+        assert!(!html.contains("chart-max"), "{html}");
     }
 
     /// An isolated sample between gaps still renders (as a short tick, with
     /// no area - there is no span to fill).
     #[test]
-    fn sparkline_shows_isolated_samples() {
-        let html = sparkline(&[None, Some(5.0), None], "test").into_string();
+    fn chart_shows_isolated_samples() {
+        let html = power_chart(&[None, Some(5.0), None], &[10, 20, 30], "test").into_string();
         assert_eq!(line_paths(&html), 1, "{html}");
         assert!(!html.contains("spark-area"), "{html}");
+    }
+
+    /// The axis labels carry the real scale: the y maximum from the samples,
+    /// the x window from the samples' own capture timestamps.
+    #[test]
+    fn chart_labels_carry_real_scale_and_window() {
+        let series = [Some(400.0), Some(2_090.0)];
+        let ticks = [1_000, 1_300]; // 300s captured -> "5m ago"
+        let html = power_chart(&series, &ticks, "test").into_string();
+        assert!(html.contains("2.09 kW"), "y max labeled in kW: {html}");
+        assert!(html.contains("5m ago"), "x window from real ticks: {html}");
+        assert!(html.contains(">now<"), "right edge labeled now: {html}");
+        // The hover data attributes expose the same real samples.
+        assert!(html.contains("data-w"), "{html}");
+        assert!(html.contains("data-t"), "{html}");
     }
 
     #[test]

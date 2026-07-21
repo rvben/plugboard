@@ -3,16 +3,20 @@ use switchkit::RelayState;
 
 use crate::fleet::{DeviceView, Fleet};
 use crate::history::Series;
+use crate::updates::UpdatesMap;
 use crate::views::components::{
-    ToggleTarget, na, power_mark, relay_control, signal_indicator, sparkline, state_badge,
+    ToggleTarget, na, power_chart, power_mark, relay_control, signal_indicator, state_badge,
     vendor_tag,
 };
 
 /// Renders one device card. This is the SSE swap unit: it must carry a stable
 /// `id="card-{id}"` and `sse-swap="device-{id}"` so a later `device-{id}` SSE
-/// event can target it. `series` is the device's recent power samples (may be
-/// empty; the sparkline renders nothing until a real sample exists).
-pub fn device_card(dev: &DeviceView, series: &[Option<f64>]) -> Markup {
+/// event can target it. `history` supplies the device's recent power samples
+/// (may be empty; the chart renders nothing until a real sample exists).
+/// `updates` marks a confirmed-newer firmware with a quiet chip.
+pub fn device_card(dev: &DeviceView, history: &Series, updates: &UpdatesMap) -> Markup {
+    let series = history.device(&dev.id);
+    let update = updates.get(&dev.id).and_then(|u| u.available.as_deref());
     // maud 0.26 dynamic attribute values use `attr=(expr)`, never `attr={ ... }`.
     // `hx-swap="outerHTML"` so an SSE `device-{id}` event REPLACES this card rather
     // than nesting a new card inside it (htmx sse-swap defaults to innerHTML).
@@ -27,12 +31,15 @@ pub fn device_card(dev: &DeviceView, series: &[Option<f64>]) -> Markup {
                 div.card-today { "today " (na(dev.today_kwh())) " kWh" }
             }
             @if series.iter().any(Option::is_some) {
-                div.card-spark { (sparkline(series, "recent power draw")) }
+                div.card-spark { (power_chart(series, &history.ticks, "recent power draw")) }
             }
             div.card-meta {
                 (vendor_tag(dev.vendor))
                 (signal_indicator(dev.signal()))
                 span.host title=(dev.host) { (dev.host) }
+                @if let Some(v) = update {
+                    span.update-tag title=(format!("firmware {v} is available")) { "update " (v) }
+                }
             }
             div.card-footer {
                 (relay_control(dev, ToggleTarget::Card(&dev.id)))
@@ -48,7 +55,12 @@ pub fn device_card(dev: &DeviceView, series: &[Option<f64>]) -> Markup {
 /// reporting a power reading (the caption says how many that is), and shows
 /// the muted n/a - never 0 - when nothing reports. This is the SSE `summary`
 /// swap unit.
-pub fn fleet_summary(fleet: &Fleet, fleet_series: &[Option<f64>]) -> Markup {
+pub fn fleet_summary(fleet: &Fleet, history: &Series, updates: &UpdatesMap) -> Markup {
+    let updates_available = fleet
+        .devices
+        .iter()
+        .filter(|d| updates.get(&d.id).is_some_and(|u| u.available.is_some()))
+        .count();
     let total = fleet.devices.len();
     let online = fleet.devices.iter().filter(|d| d.is_online()).count();
     let on = fleet
@@ -80,8 +92,8 @@ pub fn fleet_summary(fleet: &Fleet, fleet_series: &[Option<f64>]) -> Markup {
                 }
                 span.stat-detail { (reporting) " of " (total) " devices reporting" }
             }
-            @if fleet_series.iter().any(Option::is_some) {
-                div.summary-spark { (sparkline(fleet_series, "recent fleet load")) }
+            @if history.fleet.iter().any(Option::is_some) {
+                div.summary-spark { (power_chart(&history.fleet, &history.ticks, "recent fleet load")) }
             }
             div.summary-counts {
                 div.stat {
@@ -91,6 +103,12 @@ pub fn fleet_summary(fleet: &Fleet, fleet_series: &[Option<f64>]) -> Markup {
                 div.stat {
                     span.stat-label { "Online" }
                     span.stat-value { (online) span.of { " / " (total) } }
+                }
+                @if updates_available > 0 {
+                    div.stat {
+                        span.stat-label { "Updates" }
+                        span.stat-value.updates-count { (updates_available) }
+                    }
                 }
             }
         }
@@ -104,7 +122,7 @@ pub fn fleet_summary(fleet: &Fleet, fleet_series: &[Option<f64>]) -> Markup {
 /// `id="grid"` and `sse-connect` survive an `outerHTML` swap and SSE keeps
 /// working afterward. Factored out of `dashboard_page` so both call sites
 /// always produce identical grid markup.
-pub fn grid(fleet: &Fleet, history: &Series) -> Markup {
+pub fn grid(fleet: &Fleet, history: &Series, updates: &UpdatesMap) -> Markup {
     html! {
         // htmx SSE extension: `sse-connect` opens the EventSource; each card's
         // `sse-swap="device-{id}"` receives its named event and swaps in place.
@@ -117,9 +135,9 @@ pub fn grid(fleet: &Fleet, history: &Series) -> Markup {
                     span { a href="/discover" { "Discover devices" } }
                 }
             } @else {
-                (fleet_summary(fleet, &history.fleet))
+                (fleet_summary(fleet, history, updates))
                 div.grid {
-                    @for dev in &fleet.devices { (device_card(dev, history.device(&dev.id))) }
+                    @for dev in &fleet.devices { (device_card(dev, history, updates)) }
                 }
             }
         }
@@ -152,10 +170,10 @@ fn bulk_controls(fleet: &Fleet) -> Markup {
 }
 
 /// The full dashboard body: bulk controls above the device grid.
-pub fn dashboard_page(fleet: &Fleet, history: &Series) -> Markup {
+pub fn dashboard_page(fleet: &Fleet, history: &Series, updates: &UpdatesMap) -> Markup {
     html! {
         (bulk_controls(fleet))
-        (grid(fleet, history))
+        (grid(fleet, history, updates))
     }
 }
 
@@ -165,6 +183,8 @@ mod tests {
 
     use super::{device_card, fleet_summary};
     use crate::fleet::{DeviceView, Fleet};
+    use crate::history::Series;
+    use crate::updates::UpdatesMap;
 
     fn device(
         id: &str,
@@ -213,7 +233,7 @@ mod tests {
                 device("d", false, None, None),      // offline
             ],
         };
-        let html = fleet_summary(&fleet, &[]).into_string();
+        let html = fleet_summary(&fleet, &Series::default(), &UpdatesMap::new()).into_string();
         assert!(html.contains("150.0"), "sums the two real readings: {html}");
         assert!(
             html.contains("2 of 4 devices reporting"),
@@ -232,7 +252,7 @@ mod tests {
         let fleet = Fleet {
             devices: vec![device("a", false, None, None)],
         };
-        let html = fleet_summary(&fleet, &[]).into_string();
+        let html = fleet_summary(&fleet, &Series::default(), &UpdatesMap::new()).into_string();
         assert!(
             html.contains(">n/a<"),
             "absent load must render n/a: {html}"
@@ -243,14 +263,25 @@ mod tests {
         );
     }
 
-    /// A card renders a sparkline only once a real sample exists; a
-    /// history of pure gaps (device offline since startup) renders none.
+    /// A card renders a chart only once a real sample exists; a history of
+    /// pure gaps (device offline since startup) renders none.
     #[test]
-    fn card_sparkline_requires_a_real_sample() {
+    fn card_chart_requires_a_real_sample() {
         let dev = device("a", true, Some(10.0), Some(true));
-        let with = device_card(&dev, &[Some(10.0), Some(12.0)]).into_string();
+        let series = |samples: Vec<Option<f64>>| Series {
+            ticks: (0..samples.len() as u64).map(|i| 1_000 + i * 5).collect(),
+            fleet: samples.clone(),
+            devices: std::iter::once(("d-a".to_string(), samples)).collect(),
+        };
+        let with = device_card(
+            &dev,
+            &series(vec![Some(10.0), Some(12.0)]),
+            &UpdatesMap::new(),
+        )
+        .into_string();
         assert!(with.contains("sparkline"), "{with}");
-        let without = device_card(&dev, &[None, None]).into_string();
+        let without =
+            device_card(&dev, &series(vec![None, None]), &UpdatesMap::new()).into_string();
         assert!(
             !without.contains("sparkline"),
             "all-gap history must not fabricate a line: {without}"

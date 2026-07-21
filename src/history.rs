@@ -10,6 +10,9 @@
 //!   interpolated, never coerced to 0 (a measured `0.0` IS a real sample).
 //! - The fleet sample is `Some(sum of reporting devices)` only when at least
 //!   one device reported; an all-silent tick is a `None` gap.
+//! - Every tick records its capture timestamp (`ticks`, unix seconds,
+//!   supplied by the caller - the poller's own clock read), so chart axes
+//!   and hover readouts label REAL sample ages, never assumed intervals.
 //! - Buffers are keyed by device id and pruned every tick, so a removed
 //!   device's history never lingers or reattaches to a later device.
 
@@ -23,16 +26,19 @@ pub const CAPACITY: usize = 60;
 
 #[derive(Default)]
 pub struct History {
+    ticks: VecDeque<u64>,
     fleet: VecDeque<Option<f64>>,
     devices: HashMap<String, VecDeque<Option<f64>>>,
 }
 
 pub type HistoryState = Mutex<History>;
 
-/// A cloned, render-ready snapshot of every series. Views take this by
-/// reference so rendering never holds the live lock.
+/// A cloned, render-ready snapshot of every series. `ticks` runs parallel to
+/// `fleet` and to every device buffer (same ring, same tick). Views take
+/// this by reference so rendering never holds the live lock.
 #[derive(Debug, Clone, Default)]
 pub struct Series {
+    pub ticks: Vec<u64>,
     pub fleet: Vec<Option<f64>>,
     pub devices: HashMap<String, Vec<Option<f64>>>,
 }
@@ -43,17 +49,18 @@ impl Series {
     }
 }
 
-fn push(buf: &mut VecDeque<Option<f64>>, sample: Option<f64>) {
+fn push<T>(buf: &mut VecDeque<T>, sample: T) {
     if buf.len() == CAPACITY {
         buf.pop_front();
     }
     buf.push_back(sample);
 }
 
-/// Record one poll tick: `(device_id, measured_power)` covering the WHOLE
-/// fleet (the poller reconciles every device every tick, so absence from
-/// `samples` means the device left the fleet, and its buffer is pruned).
-pub fn record_tick(state: &HistoryState, samples: &[(String, Option<f64>)]) {
+/// Record one poll tick captured at `now_unix`: `(device_id, measured_power)`
+/// covering the WHOLE fleet (the poller reconciles every device every tick,
+/// so absence from `samples` means the device left the fleet, and its buffer
+/// is pruned).
+pub fn record_tick(state: &HistoryState, now_unix: u64, samples: &[(String, Option<f64>)]) {
     let mut h = state.lock().expect("history lock");
     let ids: std::collections::HashSet<&str> = samples.iter().map(|(id, _)| id.as_str()).collect();
     h.devices.retain(|id, _| ids.contains(id.as_str()));
@@ -65,12 +72,14 @@ pub fn record_tick(state: &HistoryState, samples: &[(String, Option<f64>)]) {
         push(h.devices.entry(id.clone()).or_default(), *sample);
     }
     push(&mut h.fleet, total);
+    push(&mut h.ticks, now_unix);
 }
 
 /// Snapshot every series for rendering.
 pub fn snapshot(state: &HistoryState) -> Series {
     let h = state.lock().expect("history lock");
     Series {
+        ticks: h.ticks.iter().copied().collect(),
         fleet: h.fleet.iter().copied().collect(),
         devices: h
             .devices
@@ -95,12 +104,13 @@ mod tests {
         let s = state();
         record_tick(
             &s,
+            1_000,
             &[
                 ("a".into(), Some(100.0)),
                 ("b".into(), None), // offline: a gap, not zero
             ],
         );
-        record_tick(&s, &[("a".into(), None), ("b".into(), None)]);
+        record_tick(&s, 1_005, &[("a".into(), None), ("b".into(), None)]);
 
         let snap = snapshot(&s);
         assert_eq!(snap.device("a"), &[Some(100.0), None]);
@@ -108,6 +118,8 @@ mod tests {
         // Tick 1: only `a` reported -> total is a's reading. Tick 2: nobody
         // reported -> the fleet sample is a gap, NEVER Some(0.0).
         assert_eq!(snap.fleet, vec![Some(100.0), None]);
+        // Capture times ride along, parallel to the samples.
+        assert_eq!(snap.ticks, vec![1_000, 1_005]);
     }
 
     /// A real measured zero IS a sample: a switched-off metering plug reads
@@ -115,23 +127,25 @@ mod tests {
     #[test]
     fn measured_zero_is_a_real_sample() {
         let s = state();
-        record_tick(&s, &[("a".into(), Some(0.0))]);
+        record_tick(&s, 1_000, &[("a".into(), Some(0.0))]);
         let snap = snapshot(&s);
         assert_eq!(snap.device("a"), &[Some(0.0)]);
         assert_eq!(snap.fleet, vec![Some(0.0)]);
     }
 
-    /// The ring is bounded and drops the oldest sample first.
+    /// The ring is bounded and drops the oldest sample (and its tick) first.
     #[test]
     fn ring_is_bounded_and_drops_oldest() {
         let s = state();
         for i in 0..(CAPACITY + 5) {
-            record_tick(&s, &[("a".into(), Some(i as f64))]);
+            record_tick(&s, i as u64, &[("a".into(), Some(i as f64))]);
         }
         let snap = snapshot(&s);
         assert_eq!(snap.device("a").len(), CAPACITY);
         assert_eq!(snap.device("a")[0], Some(5.0));
         assert_eq!(snap.fleet.len(), CAPACITY);
+        assert_eq!(snap.ticks.len(), CAPACITY);
+        assert_eq!(snap.ticks[0], 5);
     }
 
     /// A device removed from the fleet loses its buffer immediately: history
@@ -139,8 +153,12 @@ mod tests {
     #[test]
     fn removed_device_history_is_pruned() {
         let s = state();
-        record_tick(&s, &[("a".into(), Some(1.0)), ("b".into(), Some(2.0))]);
-        record_tick(&s, &[("a".into(), Some(1.0))]);
+        record_tick(
+            &s,
+            1_000,
+            &[("a".into(), Some(1.0)), ("b".into(), Some(2.0))],
+        );
+        record_tick(&s, 1_005, &[("a".into(), Some(1.0))]);
         let snap = snapshot(&s);
         assert!(snap.device("b").is_empty(), "b left the fleet");
         assert_eq!(snap.device("a").len(), 2);
@@ -152,5 +170,6 @@ mod tests {
         let snap = snapshot(&state());
         assert!(snap.device("nope").is_empty());
         assert!(snap.fleet.is_empty());
+        assert!(snap.ticks.is_empty());
     }
 }

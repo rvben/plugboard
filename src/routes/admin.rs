@@ -253,6 +253,16 @@ pub async fn config_set(
     Ok(html! { (admin_result(result_block(&value))) (close_modal()) }.into_response())
 }
 
+/// `POST /updates/check` - run a full fleet update-discovery pass right now
+/// (the same read-only check the background task runs; see `crate::updates`).
+/// The direct response is empty (`hx-swap="none"`): the check's SSE notify
+/// repaints dashboard chips, and the posting button's `refreshes-live` class
+/// re-renders the detail page's live region (see `app.js`).
+pub async fn updates_check(State(state): State<AppState>) -> Markup {
+    crate::updates::check_fleet(&state).await;
+    html! {}
+}
+
 /// `POST /device/:id/firmware/check` - read-only firmware version check, no
 /// confirm modal. `ops::firmware_version` returns `Option<String>` (some
 /// devices report no firmware version at all), rendered through `na()` like

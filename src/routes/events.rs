@@ -22,15 +22,16 @@ use crate::views::dashboard::{device_card, fleet_summary};
 /// the stream below.
 async fn render_all_cards(state: &AppState) -> Vec<(String, String)> {
     let series = history::snapshot(&state.inner.history);
+    let upds = crate::updates::snapshot(&state.inner.updates);
     let fleet = state.inner.fleet.read().await;
     let mut events = vec![(
         "summary".to_string(),
-        fleet_summary(&fleet, &series.fleet).into_string(),
+        fleet_summary(&fleet, &series, &upds).into_string(),
     )];
     events.extend(fleet.devices.iter().map(|d| {
         (
             format!("device-{}", d.id),
-            device_card(d, series.device(&d.id)).into_string(),
+            device_card(d, &series, &upds).into_string(),
         )
     }));
     events

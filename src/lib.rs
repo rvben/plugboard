@@ -10,4 +10,5 @@ pub mod poller;
 pub mod redact;
 pub mod routes;
 pub mod state;
+pub mod updates;
 pub mod views;

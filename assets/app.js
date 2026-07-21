@@ -115,12 +115,81 @@
       }
     });
 
-    // The device detail page's toggle discards its card-fragment response
-    // (hx-swap="none"); refresh the live status region immediately instead
-    // of waiting out the poll interval.
+    // Chart hover: a crosshair plus the exact sample value and age, read
+    // from the data-* attributes the server rendered alongside the SVG. A
+    // gap sample honestly reads "no reading", never zero.
+    function chartData(el) {
+      if (el.plugboardChart !== undefined) return el.plugboardChart;
+      try {
+        el.plugboardChart = {
+          w: JSON.parse(el.dataset.w),
+          t: JSON.parse(el.dataset.t),
+          cap: parseInt(el.dataset.cap, 10),
+        };
+      } catch (e) {
+        el.plugboardChart = null;
+      }
+      return el.plugboardChart;
+    }
+    function fmtWatts(w) {
+      return w >= 1000 ? (w / 1000).toFixed(2) + " kW" : w.toFixed(1) + " W";
+    }
+    function fmtAge(secs) {
+      if (secs < 5) return "just now";
+      if (secs < 90) return secs + "s ago";
+      if (secs < 3600) return Math.round(secs / 60) + "m ago";
+      return Math.floor(secs / 3600) + "h " + Math.round((secs % 3600) / 60) + "m ago";
+    }
+    var hoveredChart = null;
+    document.body.addEventListener("pointermove", function (evt) {
+      var chart = evt.target.closest ? evt.target.closest(".spark-chart") : null;
+      if (hoveredChart && hoveredChart !== chart) {
+        hoveredChart.classList.remove("hovered");
+        hoveredChart = null;
+      }
+      if (!chart) return;
+      var data = chartData(chart);
+      if (!data || !data.t.length || data.cap < 2) return;
+      var rect = chart.getBoundingClientRect();
+      var frac = (evt.clientX - rect.left) / rect.width;
+      var n = data.t.length;
+      // Mirror the server's x mapping: sample i sits at (cap - n + i)/(cap - 1).
+      var i = Math.round(frac * (data.cap - 1)) - (data.cap - n);
+      i = Math.max(0, Math.min(n - 1, i));
+      var xFrac = (data.cap - n + i) / (data.cap - 1);
+      chart.classList.add("hovered");
+      hoveredChart = chart;
+      var cursor = chart.querySelector(".chart-cursor");
+      var tip = chart.querySelector(".chart-tip");
+      if (cursor) cursor.style.left = (xFrac * 100).toFixed(2) + "%";
+      if (tip) {
+        var w = data.w[i];
+        var age = Math.max(0, Math.round(Date.now() / 1000 - data.t[i]));
+        tip.textContent =
+          (w === null ? "no reading" : fmtWatts(w)) + " · " + fmtAge(age);
+        tip.style.left = Math.min(88, Math.max(12, xFrac * 100)).toFixed(2) + "%";
+      }
+    });
+    document.body.addEventListener("pointerleave", function () {
+      if (hoveredChart) {
+        hoveredChart.classList.remove("hovered");
+        hoveredChart = null;
+      }
+    });
+
+    // The device detail page's toggle (and any control marked
+    // refreshes-live, e.g. the update-check button) discards its direct
+    // response (hx-swap="none"); refresh the live status region immediately
+    // instead of waiting out the poll interval.
     document.body.addEventListener("htmx:afterRequest", function (evt) {
-      if (!evt.detail.elt || !evt.detail.elt.classList) return;
-      if (!evt.detail.elt.classList.contains("device-toggle")) return;
+      var elt = evt.detail.elt;
+      if (!elt || !elt.classList) return;
+      if (
+        !elt.classList.contains("device-toggle") &&
+        !elt.classList.contains("refreshes-live")
+      ) {
+        return;
+      }
       var live = document.getElementById("device-live");
       if (live && window.htmx) htmx.trigger(live, "refresh-live");
     });

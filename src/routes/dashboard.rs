@@ -22,12 +22,13 @@ pub async fn index(State(state): State<AppState>, csrf: Csrf) -> Markup {
         show_logout: state.builtin_auth().await,
     };
     let series = history::snapshot(&state.inner.history);
+    let upds = crate::updates::snapshot(&state.inner.updates);
     let fleet = state.inner.fleet.read().await;
     layout::page(
         "Dashboard",
         &csrf.0,
         chrome,
-        dashboard::dashboard_page(&fleet, &series),
+        dashboard::dashboard_page(&fleet, &series, &upds),
     )
 }
 
@@ -68,6 +69,7 @@ pub async fn toggle(
         // the confirmed toggle hits the SAME relay. The modal injects
         // `confirmed=true`.
         let series = history::snapshot(&state.inner.history);
+        let upds = crate::updates::snapshot(&state.inner.updates);
         let fleet = state.inner.fleet.read().await;
         let dev = fleet
             .get(&id)
@@ -84,7 +86,7 @@ pub async fn toggle(
             &format!("#card-{id}"),
             "outerHTML",
         );
-        return Ok(html! { (device_card(dev, series.device(&id))) (modal) }.into_response());
+        return Ok(html! { (device_card(dev, &series, &upds)) (modal) }.into_response());
     }
     let client = state
         .client(vendor)
@@ -119,6 +121,7 @@ pub async fn toggle(
     }
     state.notify();
     let series = history::snapshot(&state.inner.history);
+    let upds = crate::updates::snapshot(&state.inner.updates);
     let fleet = state.inner.fleet.read().await;
     let dev = fleet
         .get(&id)
@@ -126,7 +129,7 @@ pub async fn toggle(
     let toast = undo_toast(&id, form.relay, relay.state.as_str());
     // close_modal() OOB-clears #modal (a no-op when no modal was open, e.g. a normal
     // card toggle); the toast appends to #toasts.
-    Ok(html! { (device_card(dev, series.device(&id))) (close_modal()) (toast) }.into_response())
+    Ok(html! { (device_card(dev, &series, &upds)) (close_modal()) (toast) }.into_response())
 }
 
 #[derive(Deserialize)]
@@ -159,6 +162,7 @@ pub async fn bulk_power(
     let confirmed = form.confirmed.as_deref() == Some("true");
     if !confirmed {
         let series = history::snapshot(&state.inner.history);
+        let upds = crate::updates::snapshot(&state.inner.updates);
         let fleet = state.inner.fleet.read().await;
         let modal = confirm_modal(
             &format!("Switch all devices {}?", form.action),
@@ -167,7 +171,7 @@ pub async fn bulk_power(
             "#grid",
             "outerHTML",
         );
-        return Ok(html! { (dashboard::grid(&fleet, &series)) (modal) }.into_response());
+        return Ok(html! { (dashboard::grid(&fleet, &series, &upds)) (modal) }.into_response());
     }
 
     // Snapshot (id, host, vendor) without holding the fleet lock across device
@@ -236,7 +240,8 @@ pub async fn bulk_power(
     poller::refresh_once(&state).await;
 
     let series = history::snapshot(&state.inner.history);
+    let upds = crate::updates::snapshot(&state.inner.updates);
     let fleet = state.inner.fleet.read().await;
     let toast = bulk_toast(switched, failed);
-    Ok(html! { (dashboard::grid(&fleet, &series)) (close_modal()) (toast) }.into_response())
+    Ok(html! { (dashboard::grid(&fleet, &series, &upds)) (close_modal()) (toast) }.into_response())
 }

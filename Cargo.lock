@@ -1548,6 +1548,7 @@ dependencies = [
  "httpmock",
  "maud",
  "rand 0.8.7",
+ "reqwest",
  "serde",
  "serde_json",
  "shelly-core",

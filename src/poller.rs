@@ -103,20 +103,25 @@ pub async fn refresh_once(state: &AppState) {
     // Record this tick's power samples into the history ring buffers, in
     // fleet order. A device is `Some(watts)` ONLY when its poll succeeded AND
     // carried a power reading; an `Err`, a lost task, or a metering-less
-    // snapshot records a gap (`None`), never a fabricated zero.
-    let samples: Vec<(String, Option<f64>)> = targets
-        .iter()
-        .map(|(id, _host, _vendor)| {
-            let power = updates
-                .iter()
-                .find(|(uid, _)| uid == id)
-                .and_then(|(_, result)| result.as_ref().ok())
-                .and_then(|s| s.energy.as_ref())
-                .and_then(|e| e.power_w);
-            (id.clone(), power)
-        })
-        .collect();
-    history::record_tick(&state.inner.history, &samples);
+    // snapshot records a gap (`None`), never a fabricated zero. The capture
+    // time rides along so chart axes label real sample ages; on the
+    // pre-epoch-clock edge case (`now_unix` is `None`) the tick is not
+    // recorded at all rather than stamped with a fabricated time.
+    if let Some(now) = now_unix {
+        let samples: Vec<(String, Option<f64>)> = targets
+            .iter()
+            .map(|(id, _host, _vendor)| {
+                let power = updates
+                    .iter()
+                    .find(|(uid, _)| uid == id)
+                    .and_then(|(_, result)| result.as_ref().ok())
+                    .and_then(|s| s.energy.as_ref())
+                    .and_then(|e| e.power_w);
+                (id.clone(), power)
+            })
+            .collect();
+        history::record_tick(&state.inner.history, now, &samples);
+    }
 
     {
         let mut fleet = state.inner.fleet.write().await;

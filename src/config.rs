@@ -20,6 +20,47 @@ pub struct Config {
     /// than relying on a reverse proxy to hide it.
     #[serde(default = "default_true")]
     pub metrics_enabled: bool,
+    /// Firmware update discovery (see `crate::updates`). Defaults so a
+    /// pre-existing config loads unchanged with checking enabled.
+    #[serde(default)]
+    pub updates: UpdatesConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdatesConfig {
+    /// Whether the background update checker runs at all. Checking is
+    /// read-only (an on-device Shelly RPC, one release-feed fetch for
+    /// Tasmota); applying an update always goes through the confirmed
+    /// firmware flow.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Seconds between automatic checks (also runs once shortly after
+    /// startup). Default six hours.
+    #[serde(default = "default_updates_interval")]
+    pub interval_secs: u64,
+    /// Where the latest Tasmota release is discovered (a GitHub
+    /// releases/latest-shaped JSON document with a `tag_name`). Overridable
+    /// for air-gapped networks or a self-hosted mirror.
+    #[serde(default = "default_tasmota_release_url")]
+    pub tasmota_release_url: String,
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        UpdatesConfig {
+            enabled: true,
+            interval_secs: default_updates_interval(),
+            tasmota_release_url: default_tasmota_release_url(),
+        }
+    }
+}
+
+fn default_updates_interval() -> u64 {
+    21_600
+}
+
+fn default_tasmota_release_url() -> String {
+    "https://api.github.com/repos/arendst/Tasmota/releases/latest".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +150,7 @@ impl Default for Config {
             auth: AuthConfig::default(),
             devices: Vec::new(),
             metrics_enabled: true,
+            updates: UpdatesConfig::default(),
         }
     }
 }

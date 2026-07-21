@@ -12,6 +12,7 @@ use crate::config::Config;
 use crate::fleet::Fleet;
 use crate::history::HistoryState;
 use crate::metrics::MetricsState;
+use crate::updates::UpdatesState;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -40,6 +41,9 @@ pub struct Inner {
     /// Recent measured-power samples per device + fleet total, one sample per
     /// poll tick; offline ticks are gaps, never zeros. See `crate::history`.
     pub history: HistoryState,
+    /// Latest firmware-update check results per device; replaced wholesale
+    /// each check so stale claims never linger. See `crate::updates`.
+    pub updates: UpdatesState,
 }
 
 impl AppState {
@@ -57,6 +61,7 @@ impl AppState {
                 rate_limiter: RateLimiter::default(),
                 metrics: Mutex::new(HashMap::new()),
                 history: HistoryState::default(),
+                updates: UpdatesState::default(),
             }),
         }
     }

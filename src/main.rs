@@ -8,6 +8,7 @@ use plugboard::config::{AuthMode, Config};
 use plugboard::poller::spawn_poller;
 use plugboard::routes;
 use plugboard::state::AppState;
+use plugboard::updates::spawn_update_checker;
 
 #[derive(Parser)]
 #[command(
@@ -62,6 +63,7 @@ async fn main() -> anyhow::Result<()> {
     }
     let state = AppState::new(cfg, args.config);
     spawn_poller(state.clone());
+    spawn_update_checker(state.clone());
     let app = routes::router(state, secure);
     let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!("listening on {}", bind);

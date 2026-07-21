@@ -2,8 +2,10 @@ use maud::{Markup, html};
 use switchkit::{Capabilities, DeviceSnapshot, Vendor};
 
 use crate::fleet::DeviceView;
+use crate::history::Series;
+use crate::updates::UpdateInfo;
 use crate::views::components::{
-    ToggleTarget, na, relay_channel_control, relay_control, signal_indicator, sparkline,
+    ToggleTarget, na, power_chart, relay_channel_control, relay_control, signal_indicator,
     state_badge, vendor_tag,
 };
 
@@ -63,13 +65,24 @@ fn humanize_uptime(raw: &str) -> String {
     raw.to_string()
 }
 
+/// How long ago an update check ran, as a compact span ("5m", "2h 10m").
+/// Falls back to "0s" if the clock reads before the check time (skew).
+fn checked_ago(update: &UpdateInfo) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(update.checked_unix);
+    crate::views::components::fmt_span(now.saturating_sub(update.checked_unix))
+}
+
 /// The hero: identity (name, host, vendor), live state + the primary relay
 /// switch, and - for metering devices only - the energy cluster: a big live
 /// draw readout, the recent power sparkline, and the meter stats. A device
 /// that has not CONFIRMED `capabilities.metering` gets no energy cluster at
 /// all (not even one full of `n/a`): showing it would imply a capability the
 /// device does not have.
-fn hero(dev: &DeviceView, series: &[Option<f64>]) -> Markup {
+fn hero(dev: &DeviceView, history: &Series) -> Markup {
+    let series = history.device(&dev.id);
     let energy = live_status(dev).and_then(|s| s.energy.as_ref());
     html! {
         section.panel.device-hero {
@@ -93,7 +106,7 @@ fn hero(dev: &DeviceView, series: &[Option<f64>]) -> Markup {
                             span.unit { "W" }
                         }
                         @if series.iter().any(Option::is_some) {
-                            div.hero-spark { (sparkline(series, "recent power draw")) }
+                            div.hero-spark { (power_chart(series, &history.ticks, "recent power draw")) }
                         }
                     }
                     dl.energy-stats {
@@ -164,7 +177,8 @@ fn network_section(dev: &DeviceView) -> Markup {
 /// `capabilities.firmware_ota` (the word "Firmware" must not appear for a
 /// device that hasn't); uptime always (n/a-honest), humanized with the raw
 /// vendor string as a tooltip.
-fn system_section(dev: &DeviceView) -> Markup {
+fn system_section(dev: &DeviceView, update: Option<&UpdateInfo>) -> Markup {
+    let available = update.and_then(|u| u.available.as_deref());
     let status = live_status(dev);
     let model = status.and_then(|s| s.model.clone());
     let generation = status.and_then(|s| s.generation.clone());
@@ -183,7 +197,13 @@ fn system_section(dev: &DeviceView) -> Markup {
                     dt { "Generation" } dd { (generation) }
                 }
                 @if capabilities(dev).firmware_ota {
-                    dt { "Firmware" } dd { (na(firmware)) }
+                    dt { "Firmware" }
+                    dd {
+                        (na(firmware))
+                        @if let Some(v) = available {
+                            " " span.update-tag { (v) " available" }
+                        }
+                    }
                 }
                 dt { "Uptime" }
                 dd {
@@ -235,7 +255,7 @@ pub fn admin_result(content: Markup) -> Markup {
 /// `#admin-result` - is absent. This is exactly how Shelly Gen1 (no RPC
 /// console, `capabilities.console == false`) simply has no console/config
 /// subsection, without any vendor special-casing in this gate.
-fn admin_panel(dev: &DeviceView) -> Markup {
+fn admin_panel(dev: &DeviceView, update: Option<&UpdateInfo>) -> Markup {
     let caps = capabilities(dev);
     if !caps.console && !caps.firmware_ota && !caps.config_backup {
         return html! {};
@@ -305,8 +325,23 @@ fn admin_panel(dev: &DeviceView) -> Markup {
                 div.admin-section.admin-firmware {
                     h3 { "Firmware" }
                     p.hint { "Check the running version, or flash new firmware over the air." }
+                    @if let Some(u) = update {
+                        @if let Some(v) = u.available.as_deref() {
+                            p.update-notice {
+                                "Version " (v) " is available (running " (u.current) ", checked " (checked_ago(u)) " ago)."
+                            }
+                            form hx-post=(format!("/device/{id}/firmware/update")) hx-target="#admin-result" hx-swap="outerHTML" {
+                                button type="submit" class="btn-primary" { "Update to " (v) }
+                            }
+                        } @else {
+                            p.hint { "Up to date (running " (u.current) ", checked " (checked_ago(u)) " ago)." }
+                        }
+                    }
                     form hx-post=(format!("/device/{id}/firmware/check")) hx-target="#admin-result" hx-swap="outerHTML" {
                         button type="submit" { "Check version" }
+                    }
+                    form.refreshes-live hx-post="/updates/check" hx-swap="none" {
+                        button type="submit" { "Check for updates" }
                     }
                     form hx-post=(format!("/device/{id}/firmware/update")) hx-target="#admin-result" hx-swap="outerHTML" {
                         div.field {
@@ -347,7 +382,12 @@ fn admin_panel(dev: &DeviceView) -> Markup {
 /// detail page tracks the poller without a manual reload. The admin panel
 /// deliberately sits OUTSIDE the live region - a refresh must never wipe
 /// console history mid-read.
-pub fn device_page(dev: &DeviceView, poll_secs: u64, series: &[Option<f64>]) -> Markup {
+pub fn device_page(
+    dev: &DeviceView,
+    poll_secs: u64,
+    history: &Series,
+    update: Option<&UpdateInfo>,
+) -> Markup {
     html! {
         div.device-detail {
             div.device-live id="device-live"
@@ -356,14 +396,14 @@ pub fn device_page(dev: &DeviceView, poll_secs: u64, series: &[Option<f64>]) -> 
                 hx-target="this"
                 hx-swap="outerHTML"
                 hx-trigger=(format!("every {poll_secs}s, refresh-live from:body")) {
-                (hero(dev, series))
+                (hero(dev, history))
                 div.device-panels {
                     (relays_section(dev))
                     (network_section(dev))
-                    (system_section(dev))
+                    (system_section(dev, update))
                 }
             }
-            div id="admin-panel" { (admin_panel(dev)) }
+            div id="admin-panel" { (admin_panel(dev, update)) }
         }
     }
 }
