@@ -226,6 +226,52 @@ pub struct PollIntervalForm {
 /// 1s minimum) at the top of every loop iteration, so this takes effect on
 /// the poller's very next tick with no extra wiring.
 #[derive(Deserialize)]
+pub struct GroupForm {
+    host: String,
+    group: String,
+}
+
+/// `POST /settings/device/group` - set or clear a device's organizational
+/// group by host (a blank submission clears it). The fleet's `DeviceView`
+/// mirrors the change immediately, like rename does, so the next dashboard
+/// render sections correctly without waiting for a restart.
+pub async fn group(
+    State(state): State<AppState>,
+    Form(form): Form<GroupForm>,
+) -> Result<Markup, AppError> {
+    let new_group = {
+        let trimmed = form.group.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    };
+    let previous = {
+        let mut cfg = state.inner.config.write().await;
+        let dev = cfg
+            .devices
+            .iter_mut()
+            .find(|d| d.host == form.host)
+            .ok_or_else(|| AppError::NotFound(form.host.clone()))?;
+        let previous = dev.group.clone();
+        dev.group = new_group.clone();
+        previous
+    };
+    if let Err(e) = state.save_config().await {
+        let mut cfg = state.inner.config.write().await;
+        if let Some(dev) = cfg.devices.iter_mut().find(|d| d.host == form.host) {
+            dev.group = previous;
+        }
+        return Err(AppError::Internal(e.to_string()));
+    }
+    {
+        let mut fleet = state.inner.fleet.write().await;
+        if let Some(dev) = fleet.get_mut(&device_id(&form.host)) {
+            dev.group = new_group;
+        }
+    }
+    state.notify();
+    Ok(render_fragment(&state).await)
+}
+
+#[derive(Deserialize)]
 pub struct UpdatesSettingsForm {
     /// Checkbox semantics: present ("true") when ticked, absent otherwise.
     enabled: Option<String>,

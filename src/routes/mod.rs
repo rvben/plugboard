@@ -63,6 +63,7 @@ pub fn router(state: AppState, secure: bool) -> Router {
         .route("/settings/device/remove", post(settings::remove))
         .route("/settings/device/credentials", post(settings::credentials))
         .route("/settings/device/protected", post(settings::protected))
+        .route("/settings/device/group", post(settings::group))
         .route("/settings/poll-interval", post(settings::poll_interval))
         .route("/settings/updates", post(settings::updates_settings))
         .route("/modal/close", get(dashboard::modal_close))

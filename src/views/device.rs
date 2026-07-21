@@ -211,6 +211,9 @@ fn hero(dev: &DeviceView, history: &Series) -> Markup {
                     h1 { (dev.display_name()) }
                     span.host { (dev.host) }
                     (vendor_tag(dev.vendor))
+                    @if let Some(g) = dev.group.as_deref().map(str::trim).filter(|g| !g.is_empty()) {
+                        span.vendor-tag.group-tag { (g) }
+                    }
                 }
                 div.device-actions {
                     (state_badge(dev))

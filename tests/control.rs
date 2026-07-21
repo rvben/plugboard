@@ -66,6 +66,7 @@ fn config_with(host: &str, protected: bool) -> Config {
             host: host.into(),
             password: None,
             protected,
+            group: None,
             vendor: Vendor::Tasmota,
         }],
         ..Config::default()
@@ -84,6 +85,7 @@ fn config_with_many(hosts: &[String]) -> Config {
                 host: host.clone(),
                 password: None,
                 protected: false,
+                group: None,
                 vendor: Vendor::Tasmota,
             })
             .collect(),
@@ -468,6 +470,75 @@ async fn bulk_power_requires_confirmation_before_switching_any_device() {
     );
 }
 
+/// A group-scoped bulk action touches ONLY that group's members: the Office
+/// device is switched, the ungrouped one is never contacted, and the modal
+/// names the group.
+#[tokio::test]
+async fn bulk_power_group_filter_switches_only_group_members() {
+    let office = MockServer::start();
+    let other = MockServer::start();
+    let power_office = mock_power(&office, "Power OFF", "OFF");
+    let power_other = mock_power(&other, "Power OFF", "OFF");
+    mock_statetext(&office);
+    mock_status(&office, "OFF");
+    let office_host = office.address().to_string();
+    let other_host = other.address().to_string();
+
+    let mut config = config_with_many(&[office_host, other_host]);
+    config.devices[0].group = Some("Office".into());
+    let state = AppState::new(config, PathBuf::from("unused.toml"));
+    let app = routes::router(state, false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    // The group-scoped confirm modal names the group.
+    let gated = post_bulk_body(&app, &cookie, &token, "action=off&group=Office").await;
+    assert_eq!(gated.status(), StatusCode::OK);
+    let gated_body = body_string(gated).await;
+    assert!(
+        gated_body.contains("Switch everything in Office off?"),
+        "the modal must name the group, body was: {gated_body}"
+    );
+    assert_eq!(power_office.hits(), 0);
+    assert_eq!(power_other.hits(), 0);
+
+    let confirmed = post_bulk_body(
+        &app,
+        &cookie,
+        &token,
+        "action=off&group=Office&confirmed=true",
+    )
+    .await;
+    assert_eq!(confirmed.status(), StatusCode::OK);
+    assert_eq!(power_office.hits(), 1, "the group member must be switched");
+    assert_eq!(
+        power_other.hits(),
+        0,
+        "a device outside the group must NEVER be touched by a group action"
+    );
+    let confirmed_body = body_string(confirmed).await;
+    assert!(
+        confirmed_body.contains("1 switched"),
+        "the summary counts only the group's members, body was: {confirmed_body}"
+    );
+}
+
+async fn post_bulk_body(app: &Router, cookie: &str, token: &str, body: &str) -> Response<Body> {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/devices/power")
+                .header("cookie", cookie)
+                .header("x-csrf-token", token)
+                .header("sec-fetch-site", "same-origin")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
 /// Partial failure: one device is reachable and switches, the other has no
 /// mock configured (so its command fails). The reachable device must still
 /// switch, the overall response is still 200, and the summary toast reports
@@ -558,6 +629,7 @@ async fn toggle_error_response_never_leaks_device_password() {
             host: host.clone(),
             password: Some(SECRET.into()),
             protected: false,
+            group: None,
             vendor: Vendor::Tasmota,
         }],
         ..Config::default()

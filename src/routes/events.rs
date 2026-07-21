@@ -14,12 +14,12 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::history;
 use crate::state::AppState;
-use crate::views::dashboard::{device_card, fleet_summary};
+use crate::views::dashboard::{device_card, fleet_summary, group_load, grouped};
 
 /// Snapshot the history, then the fleet (each under its own short-lived
-/// lock), and render every device's card plus the fleet summary as
-/// `(event name, html)` pairs. No lock is ever held across an `.await` in
-/// the stream below.
+/// lock), and render every swap unit - the fleet summary, each group's
+/// live load subtotal, and every device card - as `(event name, html)`
+/// pairs. No lock is ever held across an `.await` in the stream below.
 async fn render_all_cards(state: &AppState) -> Vec<(String, String)> {
     let series = history::snapshot(&state.inner.history);
     let upds = crate::updates::snapshot(&state.inner.updates);
@@ -28,6 +28,21 @@ async fn render_all_cards(state: &AppState) -> Vec<(String, String)> {
         "summary".to_string(),
         fleet_summary(&fleet, &series, &upds).into_string(),
     )];
+    let (groups, ungrouped) = grouped(&fleet);
+    if !groups.is_empty() {
+        for (name, devices) in &groups {
+            events.push((
+                crate::fleet::group_id(Some(name)),
+                group_load(Some(name), devices).into_string(),
+            ));
+        }
+        if !ungrouped.is_empty() {
+            events.push((
+                crate::fleet::group_id(None),
+                group_load(None, &ungrouped).into_string(),
+            ));
+        }
+    }
     events.extend(fleet.devices.iter().map(|d| {
         (
             format!("device-{}", d.id),
@@ -142,6 +157,7 @@ mod tests {
                 host: host.clone(),
                 password: None,
                 protected: false,
+                group: None,
                 vendor: Vendor::Tasmota,
             }],
             ..Config::default()
@@ -163,6 +179,7 @@ mod tests {
                 host: host.clone(),
                 password: None,
                 protected: false,
+                group: None,
                 vendor: Vendor::Tasmota,
             }],
             ..Config::default()

@@ -110,6 +110,15 @@ fn device_row(d: &DeviceConfig) -> Markup {
                     }
                     button type="submit" { "Rename" }
                 }
+                form.settings-group hx-post="/settings/device/group" hx-target="#settings-page" hx-swap="outerHTML" {
+                    input type="hidden" name="host" value=(d.host);
+                    div.field {
+                        label for=(format!("group-{id}")) { "Group" }
+                        input type="text" id=(format!("group-{id}")) name="group"
+                            value=[d.group.as_deref()] placeholder="e.g. Living room" list="group-names";
+                    }
+                    button type="submit" { "Save" }
+                }
                 form.settings-credentials hx-post="/settings/device/credentials" hx-target="#settings-page" hx-swap="outerHTML" {
                     input type="hidden" name="host" value=(d.host);
                     div.field {
@@ -133,9 +142,24 @@ fn device_row(d: &DeviceConfig) -> Markup {
 }
 
 fn devices_section(devices: &[DeviceConfig]) -> Markup {
+    // Existing group names as autocomplete suggestions, so a fleet's rooms
+    // stay consistently spelled without restricting free-form entry.
+    let mut group_names: Vec<&str> = devices
+        .iter()
+        .filter_map(|d| d.group.as_deref())
+        .map(str::trim)
+        .filter(|g| !g.is_empty())
+        .collect();
+    group_names.sort_unstable();
+    group_names.dedup();
     html! {
         section.settings-devices {
             h2 { "Devices" }
+            datalist id="group-names" {
+                @for g in &group_names {
+                    option value=(g) {}
+                }
+            }
             @if devices.is_empty() {
                 p.empty {
                     strong { "No devices configured" }

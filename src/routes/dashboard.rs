@@ -207,6 +207,9 @@ pub struct BulkForm {
     /// "on" or "off"; anything else is a 400, never silently ignored.
     action: String,
     confirmed: Option<String>,
+    /// Restrict the bulk action to one group's members (the per-group Off/On
+    /// controls); absent means the whole fleet, exactly as before groups.
+    group: Option<String>,
 }
 
 /// `POST /devices/power` - switch every device on or off. A bulk write is
@@ -229,28 +232,43 @@ pub async fn bulk_power(
         "off" => PowerAction::Off,
         other => return Err(AppError::BadRequest(format!("invalid action: {other}"))),
     };
+    // A whitespace-only group means "no group filter", matching how the
+    // grid treats blank group names as ungrouped.
+    let group = form
+        .group
+        .as_deref()
+        .map(str::trim)
+        .filter(|g| !g.is_empty())
+        .map(str::to_string);
     let confirmed = form.confirmed.as_deref() == Some("true");
     if !confirmed {
         let series = history::snapshot(&state.inner.history);
         let upds = crate::updates::snapshot(&state.inner.updates);
         let fleet = state.inner.fleet.read().await;
-        let modal = confirm_modal(
-            &format!("Switch all devices {}?", form.action),
-            "/devices/power",
-            &[("action", &form.action)],
-            "#grid",
-            "outerHTML",
-        );
+        let title = match group.as_deref() {
+            Some(g) => format!("Switch everything in {g} {}?", form.action),
+            None => format!("Switch all devices {}?", form.action),
+        };
+        let mut hidden: Vec<(&str, &str)> = vec![("action", &form.action)];
+        if let Some(g) = group.as_deref() {
+            hidden.push(("group", g));
+        }
+        let modal = confirm_modal(&title, "/devices/power", &hidden, "#grid", "outerHTML");
         return Ok(html! { (dashboard::grid(&fleet, &series, &upds)) (modal) }.into_response());
     }
 
     // Snapshot (id, host, vendor) without holding the fleet lock across device
-    // I/O, exactly like `poller::refresh_once`.
+    // I/O, exactly like `poller::refresh_once`; a group filter narrows the
+    // targets to that group's members.
     let targets: Vec<(String, String, Vendor)> = {
         let fleet = state.inner.fleet.read().await;
         fleet
             .devices
             .iter()
+            .filter(|d| match group.as_deref() {
+                Some(g) => d.group.as_deref().map(str::trim) == Some(g),
+                None => true,
+            })
             .map(|d| (d.id.clone(), d.host.clone(), d.vendor))
             .collect()
     };

@@ -23,6 +23,7 @@ fn config_with_device(host: &str) -> Config {
             host: host.into(),
             password: None,
             protected: false,
+            group: None,
             vendor: Vendor::Tasmota,
         }],
         ..Config::default()

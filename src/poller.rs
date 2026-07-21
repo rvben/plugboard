@@ -233,6 +233,7 @@ mod tests {
             name: "Plug".into(),
             host: host.into(),
             protected: false,
+            group: None,
             vendor: Vendor::Tasmota,
             reachable: true,
             status: Some(sample_status()),

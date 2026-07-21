@@ -45,6 +45,7 @@ async fn refresh_once_marks_device_reachable_with_status() {
             host: host.clone(),
             password: None,
             protected: false,
+            group: None,
             vendor: Vendor::Tasmota,
         }],
         ..Config::default()
@@ -87,6 +88,7 @@ async fn refresh_once_clears_stale_status_when_device_goes_offline() {
             host,
             password: None,
             protected: false,
+            group: None,
             vendor: Vendor::Tasmota,
         }],
         ..Config::default()

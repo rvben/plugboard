@@ -425,6 +425,7 @@ mod tests {
             name: name.into(),
             host: host.into(),
             protected: false,
+            group: None,
             vendor,
             reachable,
             status,

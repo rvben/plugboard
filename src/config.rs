@@ -130,6 +130,12 @@ pub struct DeviceConfig {
     pub password: Option<String>,
     #[serde(default)]
     pub protected: bool,
+    /// Optional organizational group ("Living room", "Office"). One group
+    /// per device, free-form; the dashboard sections by it and offers
+    /// per-group bulk power. Absent means ungrouped, which renders exactly
+    /// like the pre-group flat grid until any group exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     /// Which vendor's client serves this device. Defaults to `Tasmota` so
     /// every config written before this field existed loads unchanged and
     /// keeps behaving exactly as it did (the fleet was Tasmota-only then).
@@ -202,6 +208,35 @@ host = "192.0.2.10"
         assert!(
             resaved.contains(r#"vendor = "tasmota""#),
             "resaved config must make the vendor explicit, got:\n{resaved}"
+        );
+    }
+
+    /// `group` is absent by default, loads when present, and a group-less
+    /// device's config never gains a spurious `group` key on resave.
+    #[test]
+    fn device_config_group_round_trips_and_stays_absent_when_unset() {
+        let cfg: DeviceConfig = toml::from_str(
+            r#"
+name = "Plug"
+host = "192.0.2.12"
+group = "Living room"
+"#,
+        )
+        .expect("parses with a group");
+        assert_eq!(cfg.group.as_deref(), Some("Living room"));
+        assert!(toml::to_string(&cfg).unwrap().contains("Living room"));
+
+        let ungrouped: DeviceConfig = toml::from_str(
+            r#"
+name = "Plug"
+host = "192.0.2.13"
+"#,
+        )
+        .expect("parses without a group");
+        assert_eq!(ungrouped.group, None);
+        assert!(
+            !toml::to_string(&ungrouped).unwrap().contains("group"),
+            "an unset group must not appear in the saved config"
         );
     }
 

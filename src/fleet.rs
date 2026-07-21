@@ -13,12 +13,28 @@ pub fn device_id(host: &str) -> String {
     format!("d-{hex}")
 }
 
+/// A selector-safe id for a group name, same injective hex scheme as
+/// `device_id` (`g-` prefix); the dashboard's live per-group subtotal uses
+/// it as its SSE swap unit id. `None` (the ungrouped section) gets the
+/// fixed `g-none`, which no hex-suffixed name can collide with.
+pub fn group_id(group: Option<&str>) -> String {
+    match group {
+        Some(name) => {
+            let hex: String = name.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
+            format!("g-{hex}")
+        }
+        None => "g-none".to_string(),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DeviceView {
     pub id: String,
     pub name: String,
     pub host: String,
     pub protected: bool,
+    /// Optional organizational group, straight from `DeviceConfig.group`.
+    pub group: Option<String>,
     /// Which vendor's `switchkit::SmartDevice` client serves this device,
     /// carried straight from `DeviceConfig.vendor`. `AppState::client`
     /// dispatches on this to pick the right async client.
@@ -43,6 +59,7 @@ impl DeviceView {
             name: c.name.clone(),
             host: c.host.clone(),
             protected: c.protected,
+            group: c.group.clone(),
             vendor: c.vendor,
             reachable: false, // unknown until first poll/command
             status: None,
@@ -154,6 +171,7 @@ mod tests {
             name: "Plug".into(),
             host: "192.0.2.20".into(),
             protected: false,
+            group: None,
             vendor: Vendor::Tasmota,
             reachable,
             status: Some(sample_status()),
@@ -191,6 +209,7 @@ mod tests {
             host: "192.0.2.30".into(),
             password: None,
             protected: false,
+            group: None,
             vendor: Vendor::Shelly,
         };
         let dev = DeviceView::from_config(&cfg);

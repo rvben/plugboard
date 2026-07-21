@@ -42,6 +42,7 @@ fn device(host: &str, name: &str) -> DeviceConfig {
         host: host.into(),
         password: None,
         protected: false,
+        group: None,
         vendor: Vendor::Tasmota,
     }
 }

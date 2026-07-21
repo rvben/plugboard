@@ -41,6 +41,7 @@ async fn dashboard_renders_card_with_na_for_missing_energy() {
             host: host.clone(),
             password: None,
             protected: false,
+            group: None,
             vendor: Vendor::Tasmota,
         }],
         ..Config::default()
@@ -143,6 +144,7 @@ async fn device_detail_renders_partial_status_with_na_and_no_mqtt_section() {
             host: host.clone(),
             password: None,
             protected: false,
+            group: None,
             vendor: Vendor::Tasmota,
         }],
         ..Config::default()
@@ -210,6 +212,7 @@ async fn device_detail_shelly_vendor_renders_dbm_never_percent() {
             host: host.clone(),
             password: None,
             protected: false,
+            group: None,
             vendor: Vendor::Shelly,
         }],
         ..Config::default()
@@ -283,6 +286,7 @@ async fn device_detail_tasmota_vendor_still_renders_percent() {
             host: host.clone(),
             password: None,
             protected: false,
+            group: None,
             vendor: Vendor::Tasmota,
         }],
         ..Config::default()
@@ -341,6 +345,7 @@ async fn device_detail_without_capabilities_hides_gated_sections() {
             host: host.clone(),
             password: None,
             protected: false,
+            group: None,
             vendor: Vendor::Shelly,
         }],
         ..Config::default()

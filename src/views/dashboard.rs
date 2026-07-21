@@ -1,13 +1,90 @@
+use std::collections::BTreeMap;
+
 use maud::{Markup, html};
 use switchkit::RelayState;
 
-use crate::fleet::{DeviceView, Fleet};
+use crate::fleet::{DeviceView, Fleet, group_id};
 use crate::history::Series;
 use crate::updates::UpdatesMap;
 use crate::views::components::{
     ToggleTarget, na, power_chart, power_mark, relay_control, signal_indicator, state_badge,
     vendor_tag,
 };
+
+/// Partition the fleet into named groups (alphabetical) plus the ungrouped
+/// rest, preserving config order within each. A whitespace-only group name
+/// counts as ungrouped rather than becoming an invisible section.
+pub fn grouped(fleet: &Fleet) -> (BTreeMap<&str, Vec<&DeviceView>>, Vec<&DeviceView>) {
+    let mut groups: BTreeMap<&str, Vec<&DeviceView>> = BTreeMap::new();
+    let mut ungrouped: Vec<&DeviceView> = Vec::new();
+    for dev in &fleet.devices {
+        match dev
+            .group
+            .as_deref()
+            .map(str::trim)
+            .filter(|g| !g.is_empty())
+        {
+            Some(g) => groups.entry(g).or_default().push(dev),
+            None => ungrouped.push(dev),
+        }
+    }
+    (groups, ungrouped)
+}
+
+/// One group's live measured-load subtotal - its own SSE swap unit
+/// (`sse-swap="{group_id}"`), so the number tracks the poller without
+/// touching the section chrome around it. Same honesty as the fleet hero:
+/// sums ONLY reachable members reporting power; n/a - never 0 - when none
+/// do.
+pub fn group_load(name: Option<&str>, devices: &[&DeviceView]) -> Markup {
+    let gid = group_id(name);
+    let readings: Vec<f64> = devices.iter().filter_map(|d| d.power_w()).collect();
+    let load: Option<f64> = (!readings.is_empty()).then(|| readings.iter().sum());
+    html! {
+        span.group-load id=(gid) sse-swap=(gid) hx-swap="outerHTML" {
+            @match load {
+                Some(w) => { (format!("{w:.1}")) span.unit { " W" } }
+                None => { (na::<f64>(None)) }
+            }
+        }
+    }
+}
+
+/// A group section: name, live subtotal, per-group power controls (named
+/// groups only - the interactive chrome is static, only the subtotal span
+/// is SSE-swapped), and the member cards.
+fn group_section(
+    name: Option<&str>,
+    devices: &[&DeviceView],
+    history: &Series,
+    updates: &UpdatesMap,
+) -> Markup {
+    html! {
+        section.device-group {
+            header.group-header {
+                h2.group-name { (name.unwrap_or("Ungrouped")) }
+                (group_load(name, devices))
+                @if let Some(name) = name {
+                    div.group-actions {
+                        form hx-post="/devices/power" hx-target="#grid" hx-swap="outerHTML" {
+                            input type="hidden" name="action" value="off";
+                            input type="hidden" name="group" value=(name);
+                            button type="submit" { "Off" }
+                        }
+                        form hx-post="/devices/power" hx-target="#grid" hx-swap="outerHTML" {
+                            input type="hidden" name="action" value="on";
+                            input type="hidden" name="group" value=(name);
+                            button type="submit" { "On" }
+                        }
+                    }
+                }
+            }
+            div.grid {
+                @for dev in devices { (device_card(dev, history, updates)) }
+            }
+        }
+    }
+}
 
 /// Renders one device card. This is the SSE swap unit: it must carry a stable
 /// `id="card-{id}"` and `sse-swap="device-{id}"` so a later `device-{id}` SSE
@@ -165,8 +242,20 @@ pub fn grid(fleet: &Fleet, history: &Series, updates: &UpdatesMap) -> Markup {
                 }
             } @else {
                 (fleet_summary(fleet, history, updates))
-                div.grid {
-                    @for dev in &fleet.devices { (device_card(dev, history, updates)) }
+                @let (groups, ungrouped) = grouped(fleet);
+                @if groups.is_empty() {
+                    // No groups configured: the plain flat grid, exactly as
+                    // before groups existed.
+                    div.grid {
+                        @for dev in &fleet.devices { (device_card(dev, history, updates)) }
+                    }
+                } @else {
+                    @for (name, devices) in &groups {
+                        (group_section(Some(name), devices, history, updates))
+                    }
+                    @if !ungrouped.is_empty() {
+                        (group_section(None, &ungrouped, history, updates))
+                    }
                 }
             }
         }
@@ -260,6 +349,7 @@ mod tests {
             name: id.to_string(),
             host: id.to_string(),
             protected: false,
+            group: None,
             vendor: Vendor::Tasmota,
             reachable,
             status,
@@ -339,6 +429,62 @@ mod tests {
             !without.contains("update-dot"),
             "no confirmed update, no dot: {without}"
         );
+    }
+
+    /// With groups configured the grid sections alphabetically with
+    /// ungrouped devices last; with none it stays the flat grid. The group
+    /// subtotal follows the absent-is-never-zero rule.
+    #[test]
+    fn grid_sections_by_group_with_honest_subtotals() {
+        let mut a = device("a", true, Some(100.0), Some(true));
+        a.group = Some("Office".into());
+        let mut b = device("b", false, None, None); // offline Office member
+        b.group = Some("Office".into());
+        let mut c = device("c", true, Some(50.0), Some(true));
+        c.group = Some("Attic".into());
+        let d = device("d", true, None, Some(false)); // ungrouped
+        let fleet = Fleet {
+            devices: vec![a, b, c, d],
+        };
+        let html = super::grid(&fleet, &Series::default(), &UpdatesMap::new()).into_string();
+
+        let attic = html.find("Attic").expect("Attic section");
+        let office = html.find("Office").expect("Office section");
+        let ungrouped = html.find("Ungrouped").expect("Ungrouped section");
+        assert!(
+            attic < office && office < ungrouped,
+            "sections must order alphabetically with Ungrouped last"
+        );
+        assert!(
+            html.contains("100.0"),
+            "the Office subtotal sums its one reporting member: {html}"
+        );
+        // The ungrouped section's only member reports no power: its subtotal
+        // is the muted n/a, never 0.
+        assert!(html.contains(r#"id="g-none""#), "{html}");
+        let none_section = &html[html.find(r#"id="g-none""#).unwrap()..];
+        assert!(
+            none_section[..200].contains(">n/a<"),
+            "a group with no reporting members shows n/a, never 0: {}",
+            &none_section[..200]
+        );
+        // Per-group power controls exist for named groups only.
+        assert!(html.contains(r#"name="group" value="Office""#), "{html}");
+        assert!(
+            !html.contains(r#"name="group" value="Ungrouped""#),
+            "{html}"
+        );
+    }
+
+    /// No groups at all: the flat grid, no section chrome.
+    #[test]
+    fn grid_stays_flat_without_groups() {
+        let fleet = Fleet {
+            devices: vec![device("a", true, Some(1.0), Some(true))],
+        };
+        let html = super::grid(&fleet, &Series::default(), &UpdatesMap::new()).into_string();
+        assert!(!html.contains("group-header"), "{html}");
+        assert!(!html.contains("Ungrouped"), "{html}");
     }
 
     /// A card renders a chart only once a real sample exists; a history of

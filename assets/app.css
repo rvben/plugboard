@@ -1127,6 +1127,55 @@ a.update-tag:hover {
   gap: var(--space-3);
 }
 
+/* Group sections: a quiet header (name + live subtotal + that group's own
+   power controls) above each group's card grid. */
+.device-group {
+  margin-bottom: var(--space-5);
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-3);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.group-header h2 {
+  margin: 0;
+  font-size: var(--text-md);
+}
+
+.group-load {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-sm);
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.group-load .unit {
+  font-weight: 500;
+}
+
+.group-actions {
+  margin-left: auto;
+  display: flex;
+  gap: var(--space-2);
+}
+
+.group-actions form {
+  margin: 0;
+}
+
+.group-actions button {
+  padding: var(--space-1) var(--space-3);
+  min-height: 1.85rem;
+  font-size: var(--text-xs);
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);

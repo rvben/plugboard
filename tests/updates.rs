@@ -147,6 +147,7 @@ fn device(name: &str, host: &str, vendor: Vendor) -> DeviceConfig {
         host: host.into(),
         password: None,
         protected: false,
+        group: None,
         vendor,
     }
 }

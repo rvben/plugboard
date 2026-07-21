@@ -167,6 +167,7 @@ pub async fn add(
         host: form.host,
         password: None,
         protected: false,
+        group: None,
         // The ONLY source for this field: the server-side re-probe above.
         vendor,
     };

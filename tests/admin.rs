@@ -33,6 +33,7 @@ fn config_with_vendor(host: &str, name: &str, vendor: Vendor) -> Config {
             host: host.into(),
             password: None,
             protected: false,
+            group: None,
             vendor,
         }],
         ..Config::default()
