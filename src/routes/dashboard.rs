@@ -127,7 +127,7 @@ pub async fn toggle(
     let dev = fleet
         .get(&id)
         .ok_or_else(|| AppError::NotFound(format!("Device {id} is not configured.")))?;
-    let toast = undo_toast(&id, form.relay, relay.state.as_str());
+    let toast = undo_toast(&id, form.relay, dev.display_name(), relay.state.as_str());
     // close_modal() OOB-clears #modal (a no-op when no modal was open, e.g. a normal
     // card toggle); the toast appends to #toasts.
     Ok(html! { (device_card(dev, &series, &upds)) (close_modal()) (toast) }.into_response())
@@ -389,6 +389,6 @@ pub async fn bulk_power(
     let series = history::snapshot(&state.inner.history);
     let upds = crate::updates::snapshot(&state.inner.updates);
     let fleet = state.inner.fleet.read().await;
-    let toast = bulk_toast(switched, failed);
+    let toast = bulk_toast(group.as_deref(), switched, failed);
     Ok(html! { (dashboard::grid(&fleet, &series, &upds)) (close_modal()) (toast) }.into_response())
 }

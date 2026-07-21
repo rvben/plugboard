@@ -398,16 +398,18 @@ pub fn close_modal() -> Markup {
     html! { div id="modal" hx-swap-oob="true" {} }
 }
 
-/// Out-of-band summary toast for a bulk power action ("3 switched", or "3
-/// switched, 1 failed" when some devices errored). No undo: a bulk action
-/// touches every device, so "undo" would itself need to be a confirmed bulk
-/// write; the summary is purely informational.
-pub fn bulk_toast(switched: usize, failed: usize) -> Markup {
-    let message = if failed == 0 {
-        format!("{switched} switched")
-    } else {
-        format!("{switched} switched, {failed} failed")
+/// Out-of-band summary toast for a bulk power action, naming its scope
+/// ("Living room: 2 switched", "3 switched, 1 failed"). No undo: a bulk
+/// action touches every device, so "undo" would itself need to be a
+/// confirmed bulk write; the summary is purely informational.
+pub fn bulk_toast(scope: Option<&str>, switched: usize, failed: usize) -> Markup {
+    let mut message = match scope {
+        Some(s) => format!("{s}: {switched} switched"),
+        None => format!("{switched} switched"),
     };
+    if failed > 0 {
+        message.push_str(&format!(", {failed} failed"));
+    }
     html! {
         div id="toasts" hx-swap-oob="beforeend:#toasts" {
             div.toast { span { (message) } }
@@ -437,16 +439,22 @@ pub fn note_toast(message: &str) -> Markup {
 /// (see `app.js`), so both surfaces update without a direct swap.
 ///
 /// `channel` is echoed back so undoing a per-relay toggle switches the SAME
-/// relay, never the default one.
-pub fn undo_toast(id: &str, channel: Option<u8>, new_state: &str) -> Markup {
+/// relay, never the default one. The message names its subject (`name`,
+/// plus the relay index for channel toggles): several toasts can be on
+/// screen at once, and an unattributed "switched off" is ambiguous.
+pub fn undo_toast(id: &str, channel: Option<u8>, name: &str, new_state: &str) -> Markup {
     let vals = match channel {
         Some(idx) => format!(r#"{{"confirmed":"true","relay":"{idx}"}}"#),
         None => r#"{"confirmed":"true"}"#.to_string(),
     };
+    let subject = match channel {
+        Some(idx) => format!("{name} relay {idx}"),
+        None => name.to_string(),
+    };
     html! {
         div id="toasts" hx-swap-oob="beforeend:#toasts" {
             div.toast {
-                span { "Switched to " (new_state) }
+                span { strong { (subject) } " switched " (new_state) }
                 button.undo.device-toggle
                     hx-post=(format!("/device/{id}/toggle"))
                     hx-vals=(vals)

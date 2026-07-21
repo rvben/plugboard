@@ -225,7 +225,7 @@ async fn unprotected_toggle_hits_device_and_updates_card() {
         "card should reflect the refreshed ON state, body was: {body}"
     );
     assert!(
-        body.contains("Switched to on"),
+        body.contains("</strong> switched on") && body.contains("Test Plug"),
         "an undo toast should report the confirmed relay state"
     );
     assert!(body.contains("Undo"), "the toast should offer an undo");
@@ -337,7 +337,7 @@ async fn toggle_renders_offline_when_post_toggle_refresh_fails() {
         "telemetry must render n/a, not a stale/coerced value"
     );
     assert!(
-        body.contains("Switched to on"),
+        body.contains("</strong> switched on") && body.contains("Test Plug"),
         "the command's confirmed relay is still reported in the undo toast"
     );
 
