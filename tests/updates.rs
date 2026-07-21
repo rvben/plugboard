@@ -126,22 +126,109 @@ async fn check_fleet_confirms_updates_per_vendor() {
     let map = updates::snapshot(&state.inner.updates);
 
     let t = map.get(&device_id(&t_host)).expect("tasmota entry");
-    assert_eq!(t.current, "14.2.0");
+    assert_eq!(t.current.as_deref(), Some("14.2.0"));
     assert_eq!(
-        t.available.as_deref(),
+        t.available(),
         Some("15.5.0"),
         "the release feed's newer tag must be offered (v-prefix stripped)"
     );
 
     let s_new = map.get(&device_id(&s_new_host)).expect("shelly entry");
-    assert_eq!(s_new.current, "1.4.4");
-    assert_eq!(s_new.available.as_deref(), Some("1.5.1"));
+    assert_eq!(s_new.current.as_deref(), Some("1.4.4"));
+    assert_eq!(s_new.available(), Some("1.5.1"));
 
     let s_cur = map.get(&device_id(&s_cur_host)).expect("shelly entry");
-    assert_eq!(s_cur.current, "1.5.1");
+    assert_eq!(s_cur.current.as_deref(), Some("1.5.1"));
     assert_eq!(
-        s_cur.available, None,
+        s_cur.phase,
+        updates::Phase::UpToDate,
         "an up-to-date device must claim nothing"
+    );
+}
+
+/// The full applying lifecycle, driven by REAL observations: a commanded
+/// update enters `Applying` (which a concurrent check must NOT clobber),
+/// a poll observing the target version confirms it `Applied`, and a
+/// timed-out window ends `Unconfirmed` - never a guessed success.
+#[tokio::test]
+async fn applying_lifecycle_confirms_by_observation_or_admits_the_unknown() {
+    let tasmota = MockServer::start_async().await;
+    mock_tasmota(&tasmota, "14.2.0");
+    let feed = MockServer::start_async().await;
+    mock_release_feed(&feed, "v15.5.0");
+    let t_host = tasmota.address().to_string();
+    let id = device_id(&t_host);
+    let state = AppState::new(
+        config(
+            vec![device("T", &t_host, Vendor::Tasmota)],
+            format!("{}/latest", feed.base_url()),
+        ),
+        PathBuf::from("unused.toml"),
+    );
+    poller::refresh_once(&state).await;
+
+    updates::mark_applying(
+        &state.inner.updates,
+        &id,
+        Some("15.5.0".into()),
+        Some("14.2.0".into()),
+        1_000,
+    );
+
+    // A check while applying preserves the in-flight entry verbatim.
+    updates::check_fleet(&state).await;
+    let map = updates::snapshot(&state.inner.updates);
+    assert!(
+        matches!(map.get(&id).unwrap().phase, updates::Phase::Applying { .. }),
+        "a periodic check must never clobber an in-flight update"
+    );
+
+    // The device still reports the OLD version within the window: still
+    // applying (an OTA downloads before it reboots), never concluded early.
+    updates::observe_poll(
+        &state.inner.updates,
+        &[(id.clone(), true, Some("14.2.0".into()))],
+        1_030,
+    );
+    let map = updates::snapshot(&state.inner.updates);
+    assert!(matches!(
+        map.get(&id).unwrap().phase,
+        updates::Phase::Applying { .. }
+    ));
+
+    // The device comes back running the target: CONFIRMED applied.
+    updates::observe_poll(
+        &state.inner.updates,
+        &[(id.clone(), true, Some("15.5.0".into()))],
+        1_060,
+    );
+    let map = updates::snapshot(&state.inner.updates);
+    assert_eq!(
+        map.get(&id).unwrap().phase,
+        updates::Phase::Applied {
+            version: "15.5.0".into()
+        }
+    );
+    assert_eq!(map.get(&id).unwrap().current.as_deref(), Some("15.5.0"));
+
+    // Separately: a window that elapses with no confirmation ends honest.
+    updates::mark_applying(
+        &state.inner.updates,
+        &id,
+        Some("16.0.0".into()),
+        None,
+        2_000,
+    );
+    updates::observe_poll(
+        &state.inner.updates,
+        &[(id.clone(), false, None)],
+        2_000 + updates::APPLY_TIMEOUT_SECS + 1,
+    );
+    let map = updates::snapshot(&state.inner.updates);
+    assert_eq!(
+        map.get(&id).unwrap().phase,
+        updates::Phase::Unconfirmed,
+        "an unconfirmable outcome must be reported as unknown, never success"
     );
 }
 
@@ -177,7 +264,8 @@ async fn check_fleet_claims_nothing_without_confirmation() {
     let map = updates::snapshot(&state.inner.updates);
     let t = map.get(&device_id(&t_host)).expect("tasmota entry");
     assert_eq!(
-        t.available, None,
+        t.available(),
+        None,
         "a dead release feed must never produce an update claim"
     );
     assert!(

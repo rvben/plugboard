@@ -3,7 +3,7 @@ use switchkit::{Capabilities, DeviceSnapshot, Vendor};
 
 use crate::fleet::DeviceView;
 use crate::history::Series;
-use crate::updates::UpdateInfo;
+use crate::updates::{Phase, UpdateInfo};
 use crate::views::components::{
     ToggleTarget, na, power_chart, relay_channel_control, relay_control, signal_indicator,
     state_badge, vendor_tag,
@@ -85,48 +85,105 @@ fn check_now_form(id: &str) -> Markup {
 }
 
 /// The firmware status callout: one glanceable row stating exactly where
-/// this device stands, with the matching action beside it. Three honest
-/// states: a CONFIRMED newer version (accent treatment, the same dot glyph
-/// the dashboard cards wear, and the one-click update), confirmed up to
-/// date, or no check yet - each says what it knows (running version, when
-/// checked) and nothing more. `POST /device/:id/updates/check` re-renders
-/// exactly this fragment.
+/// this device stands, with the matching action beside it. Every state is an
+/// observation, never optimism:
+/// - `Available`: a CONFIRMED newer version (accent treatment, the same dot
+///   glyph the dashboard cards wear, one-click update).
+/// - `Applying`: the device ACCEPTED the update command; the callout polls
+///   its own fragment (`GET /device/:id/updates/callout`, every 3s) and
+///   follows the observable stages - the device drops offline to install
+///   and reboot, then the poller reads the running version back.
+/// - `Applied`: a live poll CONFIRMED the new version.
+/// - `Unconfirmed`: the window elapsed without confirmation - said plainly,
+///   with what the device currently reports.
+/// - `UpToDate` / no entry yet: state what is known, offer Check now.
 pub fn update_callout(id: &str, update: Option<&UpdateInfo>) -> Markup {
-    let available = update.and_then(|u| u.available.as_deref());
+    let running = |u: &UpdateInfo| match u.current.as_deref() {
+        Some(v) => format!("Running {v}"),
+        None => "Running version unknown".to_string(),
+    };
     html! {
-        div.update-callout.has-update[available.is_some()] id="update-callout" {
-            @match update {
-                Some(u) => {
-                    @if let Some(v) = available {
-                        div.callout-text {
-                            span.callout-title {
-                                span.update-dot-glyph aria-hidden="true" {}
-                                "Version " (v) " available"
-                            }
-                            span.callout-sub {
-                                "Running " (u.current) " · checked " (checked_ago(u)) " ago"
-                            }
-                        }
-                        div.callout-actions {
-                            form hx-post=(format!("/device/{id}/firmware/update")) hx-target="#admin-result" hx-swap="outerHTML" {
-                                button type="submit" class="btn-primary" { "Update to " (v) }
-                            }
-                            (check_now_form(id))
-                        }
-                    } @else {
-                        div.callout-text {
-                            span.callout-title {
-                                span.callout-check aria-hidden="true" { "\u{2713}" }
-                                " Up to date"
-                            }
-                            span.callout-sub {
-                                "Running " (u.current) " · checked " (checked_ago(u)) " ago"
+        @match update.map(|u| (&u.phase, u)) {
+            Some((Phase::Applying { target, .. }, _)) => {
+                div.update-callout.is-applying id="update-callout"
+                    hx-get=(format!("/device/{id}/updates/callout"))
+                    hx-trigger="every 3s"
+                    hx-swap="outerHTML" {
+                    div.callout-text {
+                        span.callout-title {
+                            span.callout-spinner aria-hidden="true" {}
+                            @match target.as_deref() {
+                                Some(v) => { "Updating to " (v) }
+                                None => { "Updating firmware" }
                             }
                         }
-                        div.callout-actions { (check_now_form(id)) }
+                        span.callout-sub {
+                            "The device downloads, installs, and reboots - it will show offline for a moment. This panel follows along."
+                        }
                     }
                 }
-                None => {
+            }
+            Some((Phase::Available(v), u)) => {
+                div.update-callout.has-update id="update-callout" {
+                    div.callout-text {
+                        span.callout-title {
+                            span.update-dot-glyph aria-hidden="true" {}
+                            "Version " (v) " available"
+                        }
+                        span.callout-sub {
+                            (running(u)) " · checked " (checked_ago(u)) " ago"
+                        }
+                    }
+                    div.callout-actions {
+                        form hx-post=(format!("/device/{id}/firmware/update")) hx-target="#update-callout" hx-swap="outerHTML" {
+                            button type="submit" class="btn-primary" { "Update to " (v) }
+                        }
+                        (check_now_form(id))
+                    }
+                }
+            }
+            Some((Phase::Applied { version }, _)) => {
+                div.update-callout id="update-callout" {
+                    div.callout-text {
+                        span.callout-title {
+                            span.callout-check aria-hidden="true" { "\u{2713}" }
+                            " Updated to " (version)
+                        }
+                        span.callout-sub {
+                            "The device is back and a live poll confirmed the new version."
+                        }
+                    }
+                    div.callout-actions { (check_now_form(id)) }
+                }
+            }
+            Some((Phase::Unconfirmed, u)) => {
+                div.update-callout.is-warn id="update-callout" {
+                    div.callout-text {
+                        span.callout-title { "Update not confirmed" }
+                        span.callout-sub {
+                            "The device did not confirm new firmware within 5 minutes. "
+                            (running(u)) ". Check the device before retrying."
+                        }
+                    }
+                    div.callout-actions { (check_now_form(id)) }
+                }
+            }
+            Some((Phase::UpToDate, u)) => {
+                div.update-callout id="update-callout" {
+                    div.callout-text {
+                        span.callout-title {
+                            span.callout-check aria-hidden="true" { "\u{2713}" }
+                            " Up to date"
+                        }
+                        span.callout-sub {
+                            (running(u)) " · checked " (checked_ago(u)) " ago"
+                        }
+                    }
+                    div.callout-actions { (check_now_form(id)) }
+                }
+            }
+            None => {
+                div.update-callout id="update-callout" {
                     div.callout-text {
                         span.callout-title { "No update check yet" }
                         span.callout-sub { "Checks run automatically; run one now if you don't want to wait." }
@@ -248,7 +305,7 @@ fn network_section(dev: &DeviceView) -> Markup {
 /// device that hasn't); uptime always (n/a-honest), humanized with the raw
 /// vendor string as a tooltip.
 fn system_section(dev: &DeviceView, update: Option<&UpdateInfo>) -> Markup {
-    let available = update.and_then(|u| u.available.as_deref());
+    let available = update.and_then(|u| u.available());
     let status = live_status(dev);
     let model = status.and_then(|s| s.model.clone());
     let generation = status.and_then(|s| s.generation.clone());
@@ -397,7 +454,7 @@ fn admin_panel(dev: &DeviceView, update: Option<&UpdateInfo>) -> Markup {
                     h3 { "Firmware" }
                     p.hint { "Updates are discovered automatically; flashing always asks for confirmation." }
                     (update_callout(id, update))
-                    form hx-post=(format!("/device/{id}/firmware/update")) hx-target="#admin-result" hx-swap="outerHTML" {
+                    form hx-post=(format!("/device/{id}/firmware/update")) hx-target="#update-callout" hx-swap="outerHTML" {
                         div.field {
                             label for=(format!("ota-{id}")) { "Flash a specific OTA URL" }
                             input.mono type="text" id=(format!("ota-{id}")) name="url" placeholder="Device default when empty";

@@ -52,6 +52,7 @@ pub fn router(state: AppState, secure: bool) -> Router {
         .route("/device/:id/config/set", post(admin::config_set))
         .route("/device/:id/firmware/update", post(admin::firmware_update))
         .route("/device/:id/updates/check", post(admin::updates_check))
+        .route("/device/:id/updates/callout", get(admin::updates_callout))
         .route("/device/:id/backup", get(admin::backup))
         .route("/discover", get(discover::index))
         .route("/discover/scan", post(discover::scan))

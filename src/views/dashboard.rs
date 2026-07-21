@@ -18,7 +18,7 @@ use crate::views::components::{
 /// affordance lives on the detail page, next to the actual Update action.
 pub fn device_card(dev: &DeviceView, history: &Series, updates: &UpdatesMap) -> Markup {
     let series = history.device(&dev.id);
-    let update = updates.get(&dev.id).and_then(|u| u.available.as_deref());
+    let update = updates.get(&dev.id).and_then(|u| u.available());
     // maud 0.26 dynamic attribute values use `attr=(expr)`, never `attr={ ... }`.
     // `hx-swap="outerHTML"` so an SSE `device-{id}` event REPLACES this card rather
     // than nesting a new card inside it (htmx sse-swap defaults to innerHTML).
@@ -70,7 +70,7 @@ pub fn fleet_summary(fleet: &Fleet, history: &Series, updates: &UpdatesMap) -> M
     let updates_available = fleet
         .devices
         .iter()
-        .filter(|d| updates.get(&d.id).is_some_and(|u| u.available.is_some()))
+        .filter(|d| updates.get(&d.id).is_some_and(|u| u.available().is_some()))
         .count();
     let total = fleet.devices.len();
     let online = fleet.devices.iter().filter(|d| d.is_online()).count();
@@ -283,9 +283,9 @@ mod tests {
         updates.insert(
             "d-a".to_string(),
             crate::updates::UpdateInfo {
-                current: "14.2.0".into(),
-                available: Some("15.5.0".into()),
+                current: Some("14.2.0".into()),
                 checked_unix: 1_000,
+                phase: crate::updates::Phase::Available("15.5.0".into()),
             },
         );
         let with = device_card(&dev, &Series::default(), &updates).into_string();

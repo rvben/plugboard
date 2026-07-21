@@ -837,9 +837,42 @@ a.update-tag:hover {
   margin-bottom: var(--space-4);
 }
 
-.update-callout.has-update {
+.update-callout.has-update,
+.update-callout.is-applying {
   background: color-mix(in oklab, var(--accent) 8%, var(--surface));
   border-color: color-mix(in oklab, var(--accent) 35%, transparent);
+}
+
+.update-callout.is-warn {
+  background: color-mix(in oklab, var(--unknown) 8%, var(--surface));
+  border-color: color-mix(in oklab, var(--unknown) 35%, transparent);
+}
+
+.update-callout.is-warn .callout-title {
+  color: var(--unknown);
+}
+
+.update-callout.is-applying .callout-title {
+  color: var(--accent);
+}
+
+.callout-spinner {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+  margin-right: 0.45em;
+  vertical-align: -0.05em;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .callout-spinner {
+    animation: none;
+    opacity: 0.6;
+  }
 }
 
 .update-callout .callout-text {
@@ -1637,20 +1670,6 @@ dd {
 
 #admin-result:empty {
   display: none;
-}
-
-/* A successful admin action's confirmation line. */
-.result-note {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  max-width: 44rem;
-  padding: var(--space-3) var(--space-4);
-  background: color-mix(in oklab, var(--on-solid) 7%, var(--surface));
-  border: 1px solid color-mix(in oklab, var(--on-solid) 30%, transparent);
-  border-radius: var(--radius-md);
-  font-size: var(--text-sm);
-  margin: 0;
 }
 
 /* The console log: a terminal. Deliberately dark in BOTH themes (a terminal

@@ -30,15 +30,54 @@ use crate::ops;
 use crate::redact::scrub_credentials;
 use crate::state::AppState;
 
+/// How long a commanded update may stay unconfirmed before the app honestly
+/// reports that it could not verify the outcome. Vendor OTA cycles finish in
+/// well under a minute; five is generous.
+pub const APPLY_TIMEOUT_SECS: u64 = 300;
+
+/// Where a device stands in its update lifecycle. Every transition is driven
+/// by an OBSERVATION (a check result, a command we sent, a poll reading the
+/// running version back), never by optimism.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Phase {
+    /// Checked; nothing newer could be confirmed.
+    UpToDate,
+    /// A strictly-newer version was confirmed available.
+    Available(String),
+    /// We commanded an update and are watching the poller for the device to
+    /// come back running it. `target` is `None` for a custom-URL flash
+    /// (whose resulting version we cannot know up front); `from` is the
+    /// version running when the command was sent.
+    Applying {
+        target: Option<String>,
+        from: Option<String>,
+        started_unix: u64,
+    },
+    /// The device came back and a live poll CONFIRMED the new version.
+    Applied { version: String },
+    /// The confirmation window elapsed without the device reporting the
+    /// expected change. The outcome is unknown - said so, never guessed.
+    Unconfirmed,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UpdateInfo {
-    /// The device-reported running version this check compared against.
-    pub current: String,
-    /// A CONFIRMED strictly-newer version, or `None` when up to date or
-    /// nothing newer could be verified.
-    pub available: Option<String>,
-    /// When this check ran (unix seconds).
+    /// The last version a live observation reported the device RUNNING
+    /// (`None` when no observation has confirmed one yet).
+    pub current: Option<String>,
+    /// When this entry last changed by check or observation (unix seconds).
     pub checked_unix: u64,
+    pub phase: Phase,
+}
+
+impl UpdateInfo {
+    /// The confirmed-available newer version, if that is the current phase.
+    pub fn available(&self) -> Option<&str> {
+        match &self.phase {
+            Phase::Available(v) => Some(v),
+            _ => None,
+        }
+    }
 }
 
 pub type UpdatesState = Mutex<HashMap<String, UpdateInfo>>;
@@ -48,6 +87,77 @@ pub type UpdatesMap = HashMap<String, UpdateInfo>;
 
 pub fn snapshot(state: &UpdatesState) -> UpdatesMap {
     state.lock().expect("updates lock").clone()
+}
+
+/// Record that an update command was ACCEPTED by the device: the entry
+/// enters `Applying`, and the poller's observations decide how it ends.
+pub fn mark_applying(
+    state: &UpdatesState,
+    id: &str,
+    target: Option<String>,
+    from: Option<String>,
+    now: u64,
+) {
+    let mut map = state.lock().expect("updates lock");
+    map.insert(
+        id.to_string(),
+        UpdateInfo {
+            current: from.clone(),
+            checked_unix: now,
+            phase: Phase::Applying {
+                target,
+                from,
+                started_unix: now,
+            },
+        },
+    );
+}
+
+/// Feed one poll tick's observations (`(id, online, running version)`) into
+/// the lifecycle: an `Applying` entry becomes `Applied` when the device
+/// comes back CONFIRMING the target version (or, for a custom flash, any
+/// version different from the one it started on), and `Unconfirmed` when
+/// the window elapses first. Everything else is left alone - the periodic
+/// check owns those transitions.
+pub fn observe_poll(
+    state: &UpdatesState,
+    observations: &[(String, bool, Option<String>)],
+    now: u64,
+) {
+    let mut map = state.lock().expect("updates lock");
+    for (id, online, version) in observations {
+        let Some(entry) = map.get_mut(id) else {
+            continue;
+        };
+        let Phase::Applying {
+            target,
+            from,
+            started_unix,
+        } = &entry.phase
+        else {
+            continue;
+        };
+        if *online && let Some(v) = version {
+            entry.current = Some(v.clone());
+            let confirmed = match (target.as_deref(), from.as_deref()) {
+                (Some(t), _) => v == t,
+                (None, Some(f)) => v != f,
+                // No target and no known starting version: nothing to
+                // compare against, so a confirmation is impossible and the
+                // timeout below will report that honestly.
+                (None, None) => false,
+            };
+            if confirmed {
+                entry.phase = Phase::Applied { version: v.clone() };
+                entry.checked_unix = now;
+                continue;
+            }
+        }
+        if now.saturating_sub(*started_unix) > APPLY_TIMEOUT_SECS {
+            entry.phase = Phase::Unconfirmed;
+            entry.checked_unix = now;
+        }
+    }
 }
 
 /// Lenient numeric parse of a firmware version: strips a leading `v`, cuts
@@ -124,13 +234,24 @@ pub async fn check_fleet(state: &AppState) {
         return;
     };
 
+    // Entries mid-`Applying` are preserved verbatim and their devices are
+    // NOT probed: the device is installing/rebooting, and the poller's
+    // observations (not a check) decide how that phase ends.
+    let applying: HashMap<String, UpdateInfo> = {
+        let map = state.inner.updates.lock().expect("updates lock");
+        map.iter()
+            .filter(|(_, u)| matches!(u.phase, Phase::Applying { .. }))
+            .map(|(id, u)| (id.clone(), u.clone()))
+            .collect()
+    };
+
     let devices: Vec<(String, String, Vendor, String)> = {
         let fleet = state.inner.fleet.read().await;
         fleet
             .devices
             .iter()
             .filter_map(|d| {
-                if !d.reachable {
+                if !d.reachable || applying.contains_key(&d.id) {
                     return None;
                 }
                 let s = d.status.as_ref()?;
@@ -159,7 +280,7 @@ pub async fn check_fleet(state: &AppState) {
         None
     };
 
-    let mut results = HashMap::new();
+    let mut results = applying;
     for (id, host, vendor, current) in devices {
         let available = match vendor {
             Vendor::Tasmota => tasmota_latest
@@ -188,9 +309,12 @@ pub async fn check_fleet(state: &AppState) {
         results.insert(
             id,
             UpdateInfo {
-                current,
-                available,
+                current: Some(current),
                 checked_unix: now,
+                phase: match available {
+                    Some(v) => Phase::Available(v),
+                    None => Phase::UpToDate,
+                },
             },
         );
     }

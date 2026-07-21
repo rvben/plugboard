@@ -278,16 +278,17 @@ pub struct FirmwareUpdateForm {
 
 /// `POST /device/:id/firmware/update` - flash firmware (from the device's own
 /// OTA URL, or the given `url`). Always destructive: without `confirmed=true`
-/// this returns a confirm modal carrying the original `url` (when given) and
-/// never touches the device; with `confirmed=true` it runs
-/// `ops::firmware_update`.
+/// this returns the UNCHANGED update callout plus a confirm modal carrying
+/// the original `url` (when given) and never touches the device; with
+/// `confirmed=true` it runs `ops::firmware_update` and, on acceptance, marks
+/// the device `Applying` and answers with the callout in that state - which
+/// then polls its own fragment and follows the poller's observations until
+/// the new version is confirmed (or honestly reported unconfirmed).
 ///
-/// Deviation from the old sync path: `switchkit::SmartDevice::firmware_update`
-/// returns `Result<()>`, not the raw command response `Value` the old
-/// `tasmota_core` op returned, so there is no JSON body left to render. The
-/// panel now shows a static confirmation message instead of `result_block`'s
-/// echoed response; the actual accepted/rejected outcome is still carried by
-/// `Ok`/`Err` exactly as before (an `Err` still renders as a 502 admin error).
+/// The applying `target` is the checker's confirmed-available version, but
+/// ONLY for a default-OTA flash: a custom `url`'s resulting version cannot
+/// be known up front, so it is tracked as a version CHANGE from the one
+/// running at command time, never a guess.
 pub async fn firmware_update(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -303,26 +304,71 @@ pub async fn firmware_update(
             "Flash firmware? This overwrites the device's running firmware.",
             &format!("/device/{id}/firmware/update"),
             &hidden,
-            "#admin-result",
+            "#update-callout",
             "outerHTML",
         );
-        return Ok(html! { (admin_result(html! {})) (modal) }.into_response());
+        let upds = crate::updates::snapshot(&state.inner.updates);
+        return Ok(html! {
+            (crate::views::device::update_callout(&id, upds.get(&id)))
+            (modal)
+        }
+        .into_response());
     }
     let (host, _name, vendor) = device_host_and_name(&state, &id).await?;
     let client = require_client(&state, &host, vendor)?;
     let target = state.target_for(&host).await;
     let url = form.url.filter(|u| !u.is_empty());
+
+    // Capture what we know BEFORE commanding: the checker's confirmed target
+    // (default-OTA only) and the version running right now.
+    let upds = crate::updates::snapshot(&state.inner.updates);
+    let entry = upds.get(&id);
+    let apply_target = if url.is_none() {
+        entry.and_then(|u| u.available().map(str::to_string))
+    } else {
+        None
+    };
+    let from = match entry.and_then(|u| u.current.clone()) {
+        Some(v) => Some(v),
+        // Fall back to the live snapshot when no check has run yet.
+        None => {
+            let fleet = state.inner.fleet.read().await;
+            fleet.get(&id).and_then(|d| {
+                d.status
+                    .as_ref()
+                    .and_then(|s| s.firmware.as_ref())
+                    .and_then(|f| f.version.clone())
+            })
+        }
+    };
+
     ops::firmware_update(client.as_ref(), &target, url.as_deref()).await?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    crate::updates::mark_applying(&state.inner.updates, &id, apply_target, from, now);
+    state.notify();
+
+    let upds = crate::updates::snapshot(&state.inner.updates);
     Ok(html! {
-        (admin_result(html! {
-            p.result-note {
-                span.callout-check aria-hidden="true" { "\u{2713}" }
-                " Firmware update started. The device installs it and reboots; expect it to show offline for a minute."
-            }
-        }))
+        (crate::views::device::update_callout(&id, upds.get(&id)))
         (close_modal())
     }
     .into_response())
+}
+
+/// `GET /device/:id/updates/callout` - the callout fragment rendered from
+/// CURRENT state, no side effects. The `Applying` callout polls this to
+/// follow the update through the poller's observations.
+pub async fn updates_callout(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Markup, AppError> {
+    device_host_and_name(&state, &id).await?;
+    let upds = crate::updates::snapshot(&state.inner.updates);
+    Ok(crate::views::device::update_callout(&id, upds.get(&id)))
 }
 
 /// `GET /device/:id/backup` - streams the device's binary config backup

@@ -127,6 +127,30 @@ pub async fn refresh_once(state: &AppState) {
         let mut fleet = state.inner.fleet.write().await;
         apply_results(&mut fleet, &targets, updates);
     }
+
+    // Feed this tick's observations (reachability + running firmware
+    // version) into the update lifecycle, so an in-flight update is
+    // CONFIRMED by a real read-back - or honestly reported unconfirmed
+    // when its window elapses.
+    if let Some(now) = now_unix {
+        let observations: Vec<(String, bool, Option<String>)> = {
+            let fleet = state.inner.fleet.read().await;
+            fleet
+                .devices
+                .iter()
+                .map(|d| {
+                    let version = d
+                        .status
+                        .as_ref()
+                        .and_then(|s| s.firmware.as_ref())
+                        .and_then(|f| f.version.clone());
+                    (d.id.clone(), d.reachable, version)
+                })
+                .collect()
+        };
+        crate::updates::observe_poll(&state.inner.updates, &observations, now);
+    }
+
     state.notify();
 }
 
