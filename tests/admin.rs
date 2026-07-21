@@ -695,23 +695,35 @@ async fn firmware_update_requires_confirmation_then_sends_upgrade() {
     assert_eq!(upgrade.hits(), 1, "confirmed=true must send Upgrade 1");
 }
 
-/// `firmware_check` is read-only: it queries `Status 2` and renders the
-/// returned `StatusFWR.Version` into the admin panel, with no confirm modal.
+/// `POST /device/:id/updates/check` runs a real discovery pass against the
+/// configured release feed and answers with the device's re-rendered
+/// firmware callout (the fragment the Check now button swaps in); an
+/// unknown device 404s before any work.
 #[tokio::test]
-async fn firmware_check_hits_device_and_renders_version() {
+async fn updates_check_returns_fresh_callout_and_404s_unknown_devices() {
     let server = MockServer::start();
-    let status2 = mock_cmnd(
-        &server,
-        "Status 2",
-        json!({"StatusFWR": {"Version": "14.2.0"}}),
-    );
+    // The poll that establishes the device's current version.
+    server.mock(|when, then| {
+        when.method(httpmock::Method::GET).path("/cm");
+        then.status(200).json_body(json!({
+            "Status": {"DeviceName": "Test Plug", "FriendlyName": ["Test Plug"], "Power": 1},
+            "StatusFWR": {"Version": "14.2.0"},
+            "StatusNET": {"IPAddress": "192.0.2.50", "Mac": "AA:BB:CC:00:11:22", "Hostname": "plug"},
+            "StatusSTS": {"POWER": "ON", "Uptime": "1T00:00:00", "Wifi": {"RSSI": 70}}
+        }));
+    });
+    let feed = MockServer::start();
+    feed.mock(|when, then| {
+        when.method(httpmock::Method::GET).path("/latest");
+        then.status(200).json_body(json!({"tag_name": "v15.5.0"}));
+    });
     let host = server.address().to_string();
     let id = device_id(&host);
 
-    let state = AppState::new(
-        config_with(&host, "Test Plug"),
-        PathBuf::from("unused.toml"),
-    );
+    let mut config = config_with(&host, "Test Plug");
+    config.updates.tasmota_release_url = format!("{}/latest", feed.base_url());
+    let state = AppState::new(config, PathBuf::from("unused.toml"));
+    plugboard::poller::refresh_once(&state).await;
     let app = routes::router(state, false);
     let (cookie, token) = get_cookie_and_token(&app).await;
 
@@ -719,26 +731,23 @@ async fn firmware_check_hits_device_and_renders_version() {
         &app,
         &cookie,
         &token,
-        &format!("/device/{id}/firmware/check"),
+        &format!("/device/{id}/updates/check"),
         "",
     )
     .await;
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        status2.hits(),
-        1,
-        "firmware_check must query the device's firmware version"
-    );
-
     let body = body_string(response).await;
     assert!(
-        body.contains(r#"id="admin-result""#),
-        "response should carry the admin-result fragment, body was: {body}"
+        body.contains(r#"id="update-callout""#),
+        "response must be the callout fragment, body was: {body}"
     );
     assert!(
-        body.contains("14.2.0"),
-        "the device's reported firmware version should be rendered, body was: {body}"
+        body.contains("15.5.0") && body.contains("Update to 15.5.0"),
+        "a confirmed-newer version must surface with its action, body was: {body}"
     );
+
+    let missing = post_form(&app, &cookie, &token, "/device/d-00/updates/check", "").await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
 
 // ---------------------------------------------------------------------------

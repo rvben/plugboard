@@ -724,17 +724,73 @@ input.mono {
   content: none;
 }
 
-/* Update availability. On cards: an ambient accent dot beside the name (the
-   version rides in the tooltip/aria-label) - update-ness is tertiary on the
-   dashboard, and a dot on the title line scans across a whole grid at a
-   glance. The wordy affordance lives on the detail page, where the Update
-   action is one jump away. */
-.update-dot {
+/* Update availability. On cards: an ambient accent dot beside the name -
+   update-ness is tertiary on the dashboard, and a dot on the title line
+   scans across a whole grid at a glance. The dot is a LINK to the device's
+   update callout with an instant tooltip on hover/focus (native `title` is
+   slow on desktop and absent on touch; tapping navigates to the
+   explanation instead). The callout repeats the same glyph, so the symbol
+   teaches its own meaning. */
+a.update-dot {
+  position: relative;
+  width: 21px;
+  height: 21px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: 50%;
+}
+
+a.update-dot::before {
+  content: "";
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--accent);
-  flex: none;
+  transition: transform var(--transition-fast);
+}
+
+a.update-dot:hover::before {
+  transform: scale(1.35);
+}
+
+a.update-dot::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--transition-fast);
+  z-index: var(--z-tooltip);
+}
+
+a.update-dot:hover::after,
+a.update-dot:focus-visible::after {
+  opacity: 1;
+}
+
+/* The same glyph inside the firmware callout, tying the card dot to its
+   explanation. */
+.update-dot-glyph {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 0.5em;
+  vertical-align: middle;
 }
 
 /* The detail page's labeled form: a small chip that links to the admin
@@ -760,15 +816,64 @@ a.update-tag:hover {
   border-color: color-mix(in oklab, var(--accent) 60%, transparent);
 }
 
-.update-notice {
-  color: var(--accent);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  margin-bottom: var(--space-2);
-}
-
 .stat-value.updates-count {
   color: var(--accent);
+}
+
+/* The firmware status callout: one glanceable row - state on the left, the
+   matching action on the right. Accent treatment ONLY when a confirmed
+   update exists. */
+.update-callout {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  max-width: 44rem;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-4);
+}
+
+.update-callout.has-update {
+  background: color-mix(in oklab, var(--accent) 8%, var(--surface));
+  border-color: color-mix(in oklab, var(--accent) 35%, transparent);
+}
+
+.update-callout .callout-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.update-callout .callout-title {
+  font-weight: 650;
+}
+
+.update-callout.has-update .callout-title {
+  color: var(--accent);
+}
+
+.update-callout .callout-check {
+  color: var(--on-solid);
+  font-weight: 700;
+}
+
+.update-callout .callout-sub {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.update-callout .callout-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.update-callout .callout-actions form {
+  margin: 0;
 }
 
 /* In-page jump targets (the System row's "available" chip) land clear of

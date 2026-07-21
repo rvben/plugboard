@@ -32,7 +32,7 @@ use switchkit::guardrail::{self, Hazard};
 use crate::error::AppError;
 use crate::ops;
 use crate::state::AppState;
-use crate::views::components::{close_modal, confirm_modal, na};
+use crate::views::components::{close_modal, confirm_modal};
 use crate::views::device::admin_result;
 
 /// Look up a device's `(host, display_name, vendor)` by id without doing any
@@ -253,31 +253,21 @@ pub async fn config_set(
     Ok(html! { (admin_result(result_block(&value))) (close_modal()) }.into_response())
 }
 
-/// `POST /updates/check` - run a full fleet update-discovery pass right now
-/// (the same read-only check the background task runs; see `crate::updates`).
-/// The direct response is empty (`hx-swap="none"`): the check's SSE notify
-/// repaints dashboard chips, and the posting button's `refreshes-live` class
-/// re-renders the detail page's live region (see `app.js`).
-pub async fn updates_check(State(state): State<AppState>) -> Markup {
-    crate::updates::check_fleet(&state).await;
-    html! {}
-}
-
-/// `POST /device/:id/firmware/check` - read-only firmware version check, no
-/// confirm modal. `ops::firmware_version` returns `Option<String>` (some
-/// devices report no firmware version at all), rendered through `na()` like
-/// every other possibly-absent value rather than assumed present.
-pub async fn firmware_check(
+/// `POST /device/:id/updates/check` - run an update-discovery pass right now
+/// (the same read-only check the background task runs; see `crate::updates`)
+/// and return the device's re-rendered firmware callout. The check's SSE
+/// notify repaints dashboard dots, and the posting form's `refreshes-live`
+/// class re-renders the detail page's live region (see `app.js`), so every
+/// surface reflects the fresh result.
+pub async fn updates_check(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Markup, AppError> {
-    let (host, _name, vendor) = device_host_and_name(&state, &id).await?;
-    let client = require_client(&state, &host, vendor)?;
-    let target = state.target_for(&host).await;
-    let version = ops::firmware_version(client.as_ref(), &target).await?;
-    Ok(admin_result(
-        html! { p { "Firmware version: " (na(version)) } },
-    ))
+    // 404 an unknown device before doing any work.
+    device_host_and_name(&state, &id).await?;
+    crate::updates::check_fleet(&state).await;
+    let upds = crate::updates::snapshot(&state.inner.updates);
+    Ok(crate::views::device::update_callout(&id, upds.get(&id)))
 }
 
 #[derive(Deserialize)]

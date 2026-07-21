@@ -23,13 +23,6 @@ pub async fn set_power(
     client.set_power(target, channel, action).await
 }
 
-pub async fn firmware_version(
-    client: &dyn SmartDevice,
-    target: &DeviceTarget,
-) -> Result<Option<String>> {
-    client.firmware_version(target).await
-}
-
 pub async fn firmware_update(
     client: &dyn SmartDevice,
     target: &DeviceTarget,

@@ -28,9 +28,14 @@ pub fn device_card(dev: &DeviceView, history: &Series, updates: &UpdatesMap) -> 
                 div.card-title {
                     a.card-name href=(format!("/device/{}", dev.id)) { (dev.display_name()) }
                     @if let Some(v) = update {
-                        span.update-dot role="img"
-                            title=(format!("firmware {v} available"))
-                            aria-label=(format!("firmware {v} available")) {}
+                        // A link, not a bare marker: hover/focus shows an
+                        // instant styled tooltip (native `title` is slow on
+                        // desktop and absent on touch), and tapping it lands
+                        // on the device's update callout, which repeats the
+                        // same dot glyph next to its explanation.
+                        a.update-dot href=(format!("/device/{}#admin-firmware", dev.id))
+                            data-tip=(format!("Firmware {v} available"))
+                            aria-label=(format!("Firmware {v} available, view update")) {}
                     }
                 }
                 div.card-state { (state_badge(dev)) }
@@ -286,8 +291,12 @@ mod tests {
         let with = device_card(&dev, &Series::default(), &updates).into_string();
         assert!(with.contains("update-dot"), "{with}");
         assert!(
-            with.contains("firmware 15.5.0 available"),
+            with.contains("Firmware 15.5.0 available"),
             "the dot must carry the exact version accessibly: {with}"
+        );
+        assert!(
+            with.contains("#admin-firmware"),
+            "the dot must link to the update action: {with}"
         );
 
         let without = device_card(&dev, &Series::default(), &UpdatesMap::new()).into_string();

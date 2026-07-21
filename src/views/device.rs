@@ -75,6 +75,69 @@ fn checked_ago(update: &UpdateInfo) -> String {
     crate::views::components::fmt_span(now.saturating_sub(update.checked_unix))
 }
 
+fn check_now_form(id: &str) -> Markup {
+    html! {
+        form.refreshes-live hx-post=(format!("/device/{id}/updates/check"))
+            hx-target="#update-callout" hx-swap="outerHTML" {
+            button type="submit" { "Check now" }
+        }
+    }
+}
+
+/// The firmware status callout: one glanceable row stating exactly where
+/// this device stands, with the matching action beside it. Three honest
+/// states: a CONFIRMED newer version (accent treatment, the same dot glyph
+/// the dashboard cards wear, and the one-click update), confirmed up to
+/// date, or no check yet - each says what it knows (running version, when
+/// checked) and nothing more. `POST /device/:id/updates/check` re-renders
+/// exactly this fragment.
+pub fn update_callout(id: &str, update: Option<&UpdateInfo>) -> Markup {
+    let available = update.and_then(|u| u.available.as_deref());
+    html! {
+        div.update-callout.has-update[available.is_some()] id="update-callout" {
+            @match update {
+                Some(u) => {
+                    @if let Some(v) = available {
+                        div.callout-text {
+                            span.callout-title {
+                                span.update-dot-glyph aria-hidden="true" {}
+                                "Version " (v) " available"
+                            }
+                            span.callout-sub {
+                                "Running " (u.current) " · checked " (checked_ago(u)) " ago"
+                            }
+                        }
+                        div.callout-actions {
+                            form hx-post=(format!("/device/{id}/firmware/update")) hx-target="#admin-result" hx-swap="outerHTML" {
+                                button type="submit" class="btn-primary" { "Update to " (v) }
+                            }
+                            (check_now_form(id))
+                        }
+                    } @else {
+                        div.callout-text {
+                            span.callout-title {
+                                span.callout-check aria-hidden="true" { "\u{2713}" }
+                                " Up to date"
+                            }
+                            span.callout-sub {
+                                "Running " (u.current) " · checked " (checked_ago(u)) " ago"
+                            }
+                        }
+                        div.callout-actions { (check_now_form(id)) }
+                    }
+                }
+                None => {
+                    div.callout-text {
+                        span.callout-title { "No update check yet" }
+                        span.callout-sub { "Checks run automatically; run one now if you don't want to wait." }
+                    }
+                    div.callout-actions { (check_now_form(id)) }
+                }
+            }
+        }
+    }
+}
+
 /// The hero: identity (name, host, vendor), live state + the primary relay
 /// switch, and - for metering devices only - the energy cluster: a big live
 /// draw readout, the recent power sparkline, and the meter stats. A device
@@ -325,28 +388,11 @@ fn admin_panel(dev: &DeviceView, update: Option<&UpdateInfo>) -> Markup {
             @if caps.firmware_ota {
                 div.admin-section.admin-firmware id="admin-firmware" {
                     h3 { "Firmware" }
-                    p.hint { "Check the running version, or flash new firmware over the air." }
-                    @if let Some(u) = update {
-                        @if let Some(v) = u.available.as_deref() {
-                            p.update-notice {
-                                "Version " (v) " is available (running " (u.current) ", checked " (checked_ago(u)) " ago)."
-                            }
-                            form hx-post=(format!("/device/{id}/firmware/update")) hx-target="#admin-result" hx-swap="outerHTML" {
-                                button type="submit" class="btn-primary" { "Update to " (v) }
-                            }
-                        } @else {
-                            p.hint { "Up to date (running " (u.current) ", checked " (checked_ago(u)) " ago)." }
-                        }
-                    }
-                    form hx-post=(format!("/device/{id}/firmware/check")) hx-target="#admin-result" hx-swap="outerHTML" {
-                        button type="submit" { "Check version" }
-                    }
-                    form.refreshes-live hx-post="/updates/check" hx-swap="none" {
-                        button type="submit" { "Check for updates" }
-                    }
+                    p.hint { "Updates are discovered automatically; flashing always asks for confirmation." }
+                    (update_callout(id, update))
                     form hx-post=(format!("/device/{id}/firmware/update")) hx-target="#admin-result" hx-swap="outerHTML" {
                         div.field {
-                            label for=(format!("ota-{id}")) { "OTA URL (optional)" }
+                            label for=(format!("ota-{id}")) { "Flash a specific OTA URL" }
                             input.mono type="text" id=(format!("ota-{id}")) name="url" placeholder="Device default when empty";
                         }
                         button type="submit" class="btn-danger" { "Flash firmware" }
