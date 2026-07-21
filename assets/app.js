@@ -23,6 +23,18 @@
   }
 
   document.addEventListener("DOMContentLoaded", function () {
+    // Safety net: every form in this app is htmx-driven, so a NATIVE submit
+    // is always a bug (an htmx-attributed form clicked in the instant before
+    // htmx processes freshly swapped content would navigate the whole page).
+    // htmx's own submit handler runs first on the element and prevents
+    // default; if that didn't happen, stop the navigation here - the next
+    // settled tick makes the control live.
+    document.body.addEventListener("submit", function (evt) {
+      var form = evt.target;
+      if (!form.matches || !form.matches("[hx-post], [hx-get]")) return;
+      if (!evt.defaultPrevented) evt.preventDefault();
+    });
+
     // Surface failed actions: htmx leaves non-2xx responses unswapped, so
     // without this an error would look like a dead button. The app's error
     // bodies are short plain-text reasons (always inserted via textContent,

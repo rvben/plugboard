@@ -6,18 +6,80 @@
 
 use std::path::PathBuf;
 
+use http_body_util::BodyExt;
 use httpmock::prelude::*;
 use plugboard::config::{Config, DeviceConfig};
 use plugboard::fleet::device_id;
 use plugboard::state::AppState;
-use plugboard::{poller, updates};
+use plugboard::{poller, routes, updates};
 use serde_json::json;
 use switchkit::Vendor;
+use tower::ServiceExt;
+
+/// GETs `/` to establish a session, returning the `Cookie` header value and
+/// the session's CSRF token (scraped from the layout's meta tag), mirroring
+/// the other route-level test files.
+async fn get_cookie_and_token(app: &axum::Router) -> (String, String) {
+    let response = app
+        .clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .uri("/")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let cookie = response
+        .headers()
+        .get(axum::http::header::SET_COOKIE)
+        .expect("session cookie")
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    let token = body
+        .split(r#"name="csrf-token" content=""#)
+        .nth(1)
+        .expect("csrf meta tag")
+        .split('"')
+        .next()
+        .unwrap()
+        .to_string();
+    (cookie, token)
+}
+
+async fn post_form(
+    app: &axum::Router,
+    cookie: &str,
+    token: &str,
+    uri: &str,
+    body: &str,
+) -> axum::http::Response<axum::body::Body> {
+    app.clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("cookie", cookie)
+                .header("x-csrf-token", token)
+                .header("sec-fetch-site", "same-origin")
+                .body(axum::body::Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
 
 fn mock_tasmota(server: &MockServer, version: &str) {
     let version = version.to_string();
     server.mock(|when, then| {
-        when.method(GET).path("/cm");
+        when.method(GET).path("/cm").query_param("cmnd", "Status 0");
         then.status(200).json_body(json!({
             "Status": {"DeviceName": "Plug", "FriendlyName": ["Plug"], "Power": 1},
             "StatusFWR": {"Version": version},
@@ -87,6 +149,72 @@ fn device(name: &str, host: &str, vendor: Vendor) -> DeviceConfig {
         protected: false,
         vendor,
     }
+}
+
+/// The `Upgrade 1` command endpoint a Tasmota default-OTA update hits.
+fn mock_upgrade(server: &MockServer) -> httpmock::Mock<'_> {
+    server.mock(|when, then| {
+        when.method(GET)
+            .path("/cm")
+            .query_param("cmnd", "Upgrade 1");
+        then.status(200).json_body(json!({"Upgrade": "1"}));
+    })
+}
+
+/// Auto-apply installs what a check confirms - but NEVER on a protected
+/// device, whose contract is "writes require confirmation": its update
+/// stays `Available`, its upgrade endpoint untouched, while the
+/// unprotected device is commanded and enters the observed `Applying`
+/// lifecycle.
+#[tokio::test]
+async fn auto_apply_updates_unprotected_devices_and_skips_protected() {
+    let open = MockServer::start_async().await;
+    mock_tasmota(&open, "14.2.0");
+    let open_upgrade = mock_upgrade(&open);
+    let guarded = MockServer::start_async().await;
+    mock_tasmota(&guarded, "14.2.0");
+    let guarded_upgrade = mock_upgrade(&guarded);
+    let feed = MockServer::start_async().await;
+    mock_release_feed(&feed, "v15.5.0");
+
+    let open_host = open.address().to_string();
+    let guarded_host = guarded.address().to_string();
+    let mut protected_device = device("Guarded", &guarded_host, Vendor::Tasmota);
+    protected_device.protected = true;
+    let mut cfg = config(
+        vec![
+            device("Open", &open_host, Vendor::Tasmota),
+            protected_device,
+        ],
+        format!("{}/latest", feed.base_url()),
+    );
+    cfg.updates.auto_apply = true;
+    let state = AppState::new(cfg, PathBuf::from("unused.toml"));
+
+    poller::refresh_once(&state).await;
+    updates::check_fleet(&state).await;
+
+    assert_eq!(
+        open_upgrade.hits(),
+        1,
+        "auto-apply must command the unprotected device's update"
+    );
+    assert_eq!(
+        guarded_upgrade.hits(),
+        0,
+        "auto-apply must NEVER touch a protected device"
+    );
+
+    let map = updates::snapshot(&state.inner.updates);
+    assert!(matches!(
+        map.get(&device_id(&open_host)).unwrap().phase,
+        updates::Phase::Applying { .. }
+    ));
+    assert_eq!(
+        map.get(&device_id(&guarded_host)).unwrap().available(),
+        Some("15.5.0"),
+        "the protected device's update stays available for a human to confirm"
+    );
 }
 
 /// A Tasmota device behind the latest release and a Shelly device whose own
@@ -229,6 +357,70 @@ async fn applying_lifecycle_confirms_by_observation_or_admits_the_unknown() {
         map.get(&id).unwrap().phase,
         updates::Phase::Unconfirmed,
         "an unconfirmable outcome must be reported as unknown, never success"
+    );
+}
+
+/// `POST /updates/apply-all` is gated like every fleet-wide write: without
+/// `confirmed=true` it returns a confirm modal naming the batch size and no
+/// device is touched; with it, every available update is commanded (a human
+/// confirmation covers protected devices too) and enters `Applying`.
+#[tokio::test]
+async fn apply_all_confirms_first_then_commands_every_available_update() {
+    let server = MockServer::start_async().await;
+    mock_tasmota(&server, "14.2.0");
+    let upgrade = mock_upgrade(&server);
+    let feed = MockServer::start_async().await;
+    mock_release_feed(&feed, "v15.5.0");
+    let host = server.address().to_string();
+    let id = device_id(&host);
+    let mut cfg = config(
+        vec![device("T", &host, Vendor::Tasmota)],
+        format!("{}/latest", feed.base_url()),
+    );
+    // Even a protected device is covered by the human confirmation here.
+    cfg.devices[0].protected = true;
+    let state = AppState::new(cfg, PathBuf::from("unused.toml"));
+    poller::refresh_once(&state).await;
+    updates::check_fleet(&state).await;
+
+    let app = routes::router(state.clone(), false);
+    let (cookie, token) = get_cookie_and_token(&app).await;
+
+    let gated = post_form(&app, &cookie, &token, "/updates/apply-all", "").await;
+    assert_eq!(gated.status(), axum::http::StatusCode::OK);
+    let gated_body = gated.into_body().collect().await.unwrap().to_bytes();
+    let gated_body = String::from_utf8(gated_body.to_vec()).unwrap();
+    assert!(
+        gated_body.contains(r#"id="modal" hx-swap-oob="true""#)
+            && gated_body.contains("Update 1 device"),
+        "unconfirmed apply-all must return a confirm modal naming the batch: {gated_body}"
+    );
+    assert_eq!(
+        upgrade.hits(),
+        0,
+        "no device is touched before confirmation"
+    );
+
+    let confirmed = post_form(
+        &app,
+        &cookie,
+        &token,
+        "/updates/apply-all",
+        "confirmed=true",
+    )
+    .await;
+    assert_eq!(confirmed.status(), axum::http::StatusCode::OK);
+    assert_eq!(upgrade.hits(), 1, "confirmed apply-all commands the update");
+    let map = updates::snapshot(&state.inner.updates);
+    assert!(matches!(
+        map.get(&id).unwrap().phase,
+        updates::Phase::Applying { .. }
+    ));
+    let body = confirmed.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(
+        body.contains("Updating 1 device"),
+        "the summary toast reports what was started: {body}"
     );
 }
 

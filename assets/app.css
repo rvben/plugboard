@@ -1117,6 +1117,10 @@ a.update-tag:hover {
   gap: var(--space-6);
 }
 
+.summary-update-all {
+  margin: 0;
+}
+
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
@@ -1891,6 +1895,16 @@ dd {
 
 .settings-poll-interval form {
   max-width: 30rem;
+}
+
+.settings-updates form {
+  align-items: end;
+}
+
+.settings-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 /* ---------- Login ---------- */

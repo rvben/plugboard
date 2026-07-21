@@ -225,6 +225,38 @@ pub struct PollIntervalForm {
 /// `poller::spawn_poller` re-reads `config.poll_interval_secs` (clamped to a
 /// 1s minimum) at the top of every loop iteration, so this takes effect on
 /// the poller's very next tick with no extra wiring.
+#[derive(Deserialize)]
+pub struct UpdatesSettingsForm {
+    /// Checkbox semantics: present ("true") when ticked, absent otherwise.
+    enabled: Option<String>,
+    auto_apply: Option<String>,
+}
+
+/// `POST /settings/updates` - the update checker's two behavior toggles,
+/// persisted with the same mutate-save-rollback discipline as every other
+/// settings write. Auto-apply always skips protected devices (enforced in
+/// `updates::apply_available`, not here).
+pub async fn updates_settings(
+    State(state): State<AppState>,
+    Form(form): Form<UpdatesSettingsForm>,
+) -> Result<Markup, AppError> {
+    let enabled = form.enabled.as_deref() == Some("true");
+    let auto_apply = form.auto_apply.as_deref() == Some("true");
+    let previous = {
+        let mut cfg = state.inner.config.write().await;
+        let previous = (cfg.updates.enabled, cfg.updates.auto_apply);
+        cfg.updates.enabled = enabled;
+        cfg.updates.auto_apply = auto_apply;
+        previous
+    };
+    if let Err(e) = state.save_config().await {
+        let mut cfg = state.inner.config.write().await;
+        (cfg.updates.enabled, cfg.updates.auto_apply) = previous;
+        return Err(AppError::Internal(e.to_string()));
+    }
+    Ok(render_fragment(&state).await)
+}
+
 pub async fn poll_interval(
     State(state): State<AppState>,
     Form(form): Form<PollIntervalForm>,

@@ -72,6 +72,15 @@ pub fn fleet_summary(fleet: &Fleet, history: &Series, updates: &UpdatesMap) -> M
         .iter()
         .filter(|d| updates.get(&d.id).is_some_and(|u| u.available().is_some()))
         .count();
+    let updating = fleet
+        .devices
+        .iter()
+        .filter(|d| {
+            updates
+                .get(&d.id)
+                .is_some_and(|u| matches!(u.phase, crate::updates::Phase::Applying { .. }))
+        })
+        .count();
     let total = fleet.devices.len();
     let online = fleet.devices.iter().filter(|d| d.is_online()).count();
     let on = fleet
@@ -121,6 +130,15 @@ pub fn fleet_summary(fleet: &Fleet, history: &Series, updates: &UpdatesMap) -> M
                         span.stat-value.updates-count { (updates_available) }
                     }
                 }
+                @if updating > 0 {
+                    div.stat {
+                        span.stat-label { "Updating" }
+                        span.stat-value.updates-count {
+                            span.callout-spinner aria-hidden="true" {}
+                            (updating)
+                        }
+                    }
+                }
             }
         }
     }
@@ -155,17 +173,34 @@ pub fn grid(fleet: &Fleet, history: &Series, updates: &UpdatesMap) -> Markup {
     }
 }
 
-/// The bulk all-on/off controls above the grid, absent for an empty fleet
-/// (nothing to switch). Each form posts `/devices/power` and targets `#grid`
-/// (`hx-swap="outerHTML"`); the route always confirms first, so the initial
-/// response is a re-rendered (unchanged) grid plus an OOB confirm modal,
-/// never a direct write.
-fn bulk_controls(fleet: &Fleet) -> Markup {
+/// The bulk controls above the grid, absent for an empty fleet (nothing to
+/// switch). Each form targets `#grid` (`hx-swap="outerHTML"`); every route
+/// always confirms first, so the initial response is a re-rendered
+/// (unchanged) grid plus an OOB confirm modal, never a direct write.
+///
+/// These deliberately live OUTSIDE the SSE-swapped `#grid`: a primary
+/// action inside a node that is replaced every poll tick can be swapped out
+/// mid-click. The Update all button's count is a page-load snapshot; the
+/// confirm modal re-counts, and a fleet with nothing left to update answers
+/// with an "up to date" toast.
+fn bulk_controls(fleet: &Fleet, updates: &UpdatesMap) -> Markup {
+    let updates_available = fleet
+        .devices
+        .iter()
+        .filter(|d| updates.get(&d.id).is_some_and(|u| u.available().is_some()))
+        .count();
     html! {
         div.grid-header {
             h1 { "Devices" }
             @if !fleet.devices.is_empty() {
                 div.bulk-actions {
+                    @if updates_available > 0 {
+                        form hx-post="/updates/apply-all" hx-target="#grid" hx-swap="outerHTML" {
+                            button type="submit" class="btn-primary" {
+                                "Update all (" (updates_available) ")"
+                            }
+                        }
+                    }
                     form hx-post="/devices/power" hx-target="#grid" hx-swap="outerHTML" {
                         input type="hidden" name="action" value="off";
                         button type="submit" { "All off" }
@@ -183,7 +218,7 @@ fn bulk_controls(fleet: &Fleet) -> Markup {
 /// The full dashboard body: bulk controls above the device grid.
 pub fn dashboard_page(fleet: &Fleet, history: &Series, updates: &UpdatesMap) -> Markup {
     html! {
-        (bulk_controls(fleet))
+        (bulk_controls(fleet, updates))
         (grid(fleet, history, updates))
     }
 }

@@ -47,6 +47,7 @@ pub fn router(state: AppState, secure: bool) -> Router {
         .route("/device/:id", get(device::detail))
         .route("/device/:id/toggle", post(dashboard::toggle))
         .route("/devices/power", post(dashboard::bulk_power))
+        .route("/updates/apply-all", post(dashboard::updates_apply_all))
         .route("/device/:id/console", post(admin::console))
         .route("/device/:id/config/get", post(admin::config_get))
         .route("/device/:id/config/set", post(admin::config_set))
@@ -63,6 +64,7 @@ pub fn router(state: AppState, secure: bool) -> Router {
         .route("/settings/device/credentials", post(settings::credentials))
         .route("/settings/device/protected", post(settings::protected))
         .route("/settings/poll-interval", post(settings::poll_interval))
+        .route("/settings/updates", post(settings::updates_settings))
         .route("/modal/close", get(dashboard::modal_close))
         .route("/logout", post(auth::logout))
         // Unknown paths get a real 404 (the error-page middleware styles it

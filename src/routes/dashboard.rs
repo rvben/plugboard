@@ -12,7 +12,7 @@ use crate::ops;
 use crate::poller;
 use crate::redact::scrub_credentials;
 use crate::state::AppState;
-use crate::views::components::{bulk_toast, close_modal, confirm_modal, undo_toast};
+use crate::views::components::{bulk_toast, close_modal, confirm_modal, note_toast, undo_toast};
 use crate::views::dashboard::device_card;
 use crate::views::{dashboard, layout};
 
@@ -130,6 +130,76 @@ pub async fn toggle(
     // close_modal() OOB-clears #modal (a no-op when no modal was open, e.g. a normal
     // card toggle); the toast appends to #toasts.
     Ok(html! { (device_card(dev, &series, &upds)) (close_modal()) (toast) }.into_response())
+}
+
+#[derive(Deserialize)]
+pub struct ApplyAllForm {
+    confirmed: Option<String>,
+}
+
+/// `POST /updates/apply-all` - command a firmware update for every device
+/// with a CONFIRMED available version. Fleet-wide and firmware-flashing, so
+/// it ALWAYS confirms first (one human confirmation covers the batch,
+/// protected devices included, exactly like bulk power); each accepted
+/// command enters the same observed `Applying` lifecycle as a single
+/// update, so the cards and callouts follow every device individually.
+pub async fn updates_apply_all(
+    State(state): State<AppState>,
+    Form(form): Form<ApplyAllForm>,
+) -> Result<axum::response::Response, AppError> {
+    let confirmed = form.confirmed.as_deref() == Some("true");
+    if !confirmed {
+        let series = history::snapshot(&state.inner.history);
+        let upds = crate::updates::snapshot(&state.inner.updates);
+        let fleet = state.inner.fleet.read().await;
+        let count = fleet
+            .devices
+            .iter()
+            .filter(|d| upds.get(&d.id).is_some_and(|u| u.available().is_some()))
+            .count();
+        // The button's count is a page-load snapshot; if everything was
+        // updated meanwhile, say so instead of asking to confirm nothing.
+        if count == 0 {
+            return Ok(html! {
+                (dashboard::grid(&fleet, &series, &upds))
+                (note_toast("Everything is up to date."))
+            }
+            .into_response());
+        }
+        let modal = confirm_modal(
+            &format!(
+                "Update {count} device{} to newer firmware? Each installs it and reboots.",
+                if count == 1 { "" } else { "s" }
+            ),
+            "/updates/apply-all",
+            &[],
+            "#grid",
+            "outerHTML",
+        );
+        return Ok(html! { (dashboard::grid(&fleet, &series, &upds)) (modal) }.into_response());
+    }
+
+    let (started, failed) = crate::updates::apply_available(&state, true).await;
+    let message = if failed == 0 {
+        format!(
+            "Updating {started} device{}",
+            if started == 1 { "" } else { "s" }
+        )
+    } else {
+        format!(
+            "Updating {started} device{}, {failed} failed to start",
+            if started == 1 { "" } else { "s" }
+        )
+    };
+    let series = history::snapshot(&state.inner.history);
+    let upds = crate::updates::snapshot(&state.inner.updates);
+    let fleet = state.inner.fleet.read().await;
+    Ok(html! {
+        (dashboard::grid(&fleet, &series, &upds))
+        (close_modal())
+        (note_toast(&message))
+    }
+    .into_response())
 }
 
 #[derive(Deserialize)]

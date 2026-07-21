@@ -322,6 +322,104 @@ pub async fn check_fleet(state: &AppState) {
     *state.inner.updates.lock().expect("updates lock") = results;
     // Repaint dashboards over SSE so update chips appear without a reload.
     state.notify();
+
+    // Opt-in auto-apply: install what this check just confirmed, through the
+    // SAME observed lifecycle the UI button uses. `apply_available` always
+    // skips `protected` devices on this path - no human confirmed anything.
+    let auto_apply = state.inner.config.read().await.updates.auto_apply;
+    if auto_apply {
+        let (started, failed) = apply_available(state, false).await;
+        if started > 0 || failed > 0 {
+            tracing::info!(started, failed, "auto-applied firmware updates");
+        }
+    }
+}
+
+/// Command firmware updates for EVERY device currently in `Available`,
+/// each through the same per-device flow the callout button uses: send the
+/// command, mark `Applying`, and let the poller's observations decide the
+/// outcome. `include_protected` is true only for the human-confirmed
+/// "Update all" action; the auto path passes false, so a `protected`
+/// device's confirmation contract survives. Fan-out is bounded like every
+/// other fleet-wide action. Returns `(started, failed)`.
+pub async fn apply_available(state: &AppState, include_protected: bool) -> (usize, usize) {
+    let Some(now) = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .ok()
+    else {
+        return (0, 0);
+    };
+    let candidates: Vec<(String, String, Vendor, String, Option<String>)> = {
+        let upds = snapshot(&state.inner.updates);
+        let fleet = state.inner.fleet.read().await;
+        fleet
+            .devices
+            .iter()
+            .filter_map(|d| {
+                if d.protected && !include_protected {
+                    return None;
+                }
+                let u = upds.get(&d.id)?;
+                let target = u.available()?.to_string();
+                Some((
+                    d.id.clone(),
+                    d.host.clone(),
+                    d.vendor,
+                    target,
+                    u.current.clone(),
+                ))
+            })
+            .collect()
+    };
+    if candidates.is_empty() {
+        return (0, 0);
+    }
+
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(crate::poller::MAX_CONCURRENT));
+    let mut set = tokio::task::JoinSet::new();
+    for (id, host, vendor, target_version, from) in candidates {
+        let state = state.clone();
+        let sem = sem.clone();
+        set.spawn(async move {
+            let _permit = sem.acquire_owned().await.expect("semaphore open");
+            let Some(client) = state.client(vendor) else {
+                return (id, false);
+            };
+            let target = state.target_for(&host).await;
+            match ops::firmware_update(client.as_ref(), &target, None).await {
+                Ok(()) => {
+                    mark_applying(&state.inner.updates, &id, Some(target_version), from, now);
+                    (id, true)
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        id = %id,
+                        error = %scrub_credentials(&e.to_string()),
+                        "firmware update command failed"
+                    );
+                    (id, false)
+                }
+            }
+        });
+    }
+
+    let mut started = 0usize;
+    let mut failed = 0usize;
+    while let Some(joined) = set.join_next().await {
+        match joined {
+            Ok((_, true)) => started += 1,
+            Ok((_, false)) => failed += 1,
+            Err(join_err) => {
+                failed += 1;
+                tracing::warn!(error = %join_err, "firmware update task failed to join");
+            }
+        }
+    }
+    if started > 0 {
+        state.notify();
+    }
+    (started, failed)
 }
 
 /// Spawn the periodic checker: once shortly after startup (letting the first

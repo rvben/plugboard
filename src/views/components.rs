@@ -409,6 +409,15 @@ pub fn bulk_toast(switched: usize, failed: usize) -> Markup {
     }
 }
 
+/// Out-of-band informational toast with no actions.
+pub fn note_toast(message: &str) -> Markup {
+    html! {
+        div id="toasts" hx-swap-oob="beforeend:#toasts" {
+            div.toast { span { (message) } }
+        }
+    }
+}
+
 /// Out-of-band toast with an Undo action (a toggle is its own inverse, so this
 /// switches back). `confirmed=true` via hx-vals so undo also works on protected
 /// devices without another modal. `hx-swap-oob` injects it into `#toasts`.

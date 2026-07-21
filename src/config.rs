@@ -38,6 +38,13 @@ pub struct UpdatesConfig {
     /// startup). Default six hours.
     #[serde(default = "default_updates_interval")]
     pub interval_secs: u64,
+    /// Install discovered updates automatically. Off by default; when on,
+    /// every check that confirms a newer version commands the update through
+    /// the same observed lifecycle the UI button uses. `protected` devices
+    /// are ALWAYS skipped: their contract is "writes require confirmation",
+    /// and auto-apply has no human confirming.
+    #[serde(default)]
+    pub auto_apply: bool,
     /// Where the latest Tasmota release is discovered (a GitHub
     /// releases/latest-shaped JSON document with a `tag_name`). Overridable
     /// for air-gapped networks or a self-hosted mirror.
@@ -50,6 +57,7 @@ impl Default for UpdatesConfig {
         UpdatesConfig {
             enabled: true,
             interval_secs: default_updates_interval(),
+            auto_apply: false,
             tasmota_release_url: default_tasmota_release_url(),
         }
     }

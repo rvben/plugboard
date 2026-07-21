@@ -12,9 +12,33 @@
 
 use maud::{Markup, html};
 
-use crate::config::{AuthConfig, AuthMode, Config, DeviceConfig};
+use crate::config::{AuthConfig, AuthMode, Config, DeviceConfig, UpdatesConfig};
 use crate::fleet::device_id;
 use crate::views::components::vendor_tag;
+
+fn updates_section(updates: &UpdatesConfig) -> Markup {
+    html! {
+        section.panel.settings-updates {
+            h2 { "Firmware updates" }
+            form hx-post="/settings/updates" hx-target="#settings-page" hx-swap="outerHTML" {
+                div.settings-toggles {
+                    label {
+                        input type="checkbox" name="enabled" value="true" checked[updates.enabled];
+                        "Check for updates automatically"
+                    }
+                    label {
+                        input type="checkbox" name="auto_apply" value="true" checked[updates.auto_apply];
+                        "Install updates automatically"
+                    }
+                }
+                button type="submit" { "Save" }
+            }
+            p.hint {
+                "Checks ask Shelly devices directly and compare Tasmota against the latest release. Automatic installs go through the same observed update flow as the buttons, and always skip protected devices."
+            }
+        }
+    }
+}
 
 fn auth_section(auth: &AuthConfig) -> Markup {
     let mode_label = match auth.mode {
@@ -140,6 +164,7 @@ pub fn settings_page(config: &Config) -> Markup {
                 h1 { "Settings" }
             }
             (devices_section(&config.devices))
+            (updates_section(&config.updates))
             (poll_interval_section(config.poll_interval_secs))
             (auth_section(&config.auth))
         }
