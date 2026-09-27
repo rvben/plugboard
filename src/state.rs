@@ -31,6 +31,10 @@ pub struct Inner {
     /// without naming the concrete vendor type at every call site.
     pub tasmota: Arc<dyn SmartDevice + Send + Sync>,
     pub shelly: Arc<dyn SmartDevice + Send + Sync>,
+    /// HTTP client for `updates::check_fleet`'s Tasmota release-feed fetch.
+    /// Built once and reused every check cycle, exactly like `tasmota` and
+    /// `shelly` above, rather than rebuilt on every cycle.
+    pub updates_http: reqwest::Client,
     /// Per-IP login attempt counter for `POST /login` (Task 11). One instance
     /// for the process lifetime, shared across every request.
     pub rate_limiter: RateLimiter,
@@ -54,6 +58,11 @@ impl AppState {
             inner: Arc::new(Inner {
                 tasmota: Arc::new(tasmota_core::HttpTransport::new(Duration::from_secs(5))),
                 shelly: Arc::new(shelly_core::ShellyClient::default()),
+                updates_http: reqwest::Client::builder()
+                    .timeout(Duration::from_secs(15))
+                    .user_agent(concat!("plugboard/", env!("CARGO_PKG_VERSION")))
+                    .build()
+                    .expect("build reqwest client"),
                 config: RwLock::new(config),
                 config_path,
                 fleet: RwLock::new(fleet),

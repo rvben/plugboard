@@ -265,17 +265,7 @@ pub async fn check_fleet(state: &AppState) {
     };
 
     let tasmota_latest = if devices.iter().any(|(_, _, v, _)| *v == Vendor::Tasmota) {
-        match reqwest::Client::builder()
-            .timeout(Duration::from_secs(15))
-            .user_agent(concat!("plugboard/", env!("CARGO_PKG_VERSION")))
-            .build()
-        {
-            Ok(http) => fetch_tasmota_latest(&http, &release_url).await,
-            Err(e) => {
-                tracing::warn!(error = %e, "could not build update-check http client");
-                None
-            }
-        }
+        fetch_tasmota_latest(&state.inner.updates_http, &release_url).await
     } else {
         None
     };
