@@ -181,6 +181,13 @@ pub async fn require_auth(
 pub const MAX_LOGIN_ATTEMPTS: u32 = 5;
 pub const LOGIN_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 
+/// `attempts` plus the time of its last sweep, held behind one lock so a
+/// sweep and the map it prunes are always updated together.
+struct RateLimiterState {
+    attempts: HashMap<IpAddr, (u32, Instant)>,
+    last_sweep: Instant,
+}
+
 /// In-memory per-IP login attempt counter. `attempt` is a plain synchronous
 /// call (the mutex is held only for the duration of the increment, never
 /// across an `.await`), so callers check/update it BEFORE any async work
@@ -188,7 +195,7 @@ pub const LOGIN_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 pub struct RateLimiter {
     max_attempts: u32,
     window: Duration,
-    attempts: Mutex<HashMap<IpAddr, (u32, Instant)>>,
+    state: Mutex<RateLimiterState>,
 }
 
 impl RateLimiter {
@@ -196,21 +203,48 @@ impl RateLimiter {
         RateLimiter {
             max_attempts,
             window,
-            attempts: Mutex::new(HashMap::new()),
+            state: Mutex::new(RateLimiterState {
+                attempts: HashMap::new(),
+                last_sweep: Instant::now(),
+            }),
         }
     }
 
     /// Records one attempt from `ip` and returns whether it is allowed to
     /// proceed. The per-IP counter resets once `window` has elapsed since
     /// the first attempt in the current window.
+    ///
+    /// A thin wrapper around `attempt_at` supplying the real clock; tests use
+    /// `attempt_at` directly with explicit `Instant`s so the timing they
+    /// exercise never depends on an actual sleep.
     pub fn attempt(&self, ip: IpAddr) -> bool {
-        let mut attempts = self
-            .attempts
+        self.attempt_at(ip, Instant::now())
+    }
+
+    /// Nothing ever removes a key from `attempts` except the sweep below: an
+    /// IP that attempts once and never returns would otherwise sit in the
+    /// map for the life of the process, and since `ip` is attacker-controlled
+    /// (anyone who can reach `/login`), that is an unbounded, attacker-driven
+    /// memory leak. The sweep runs at most once per `window`, gated on the
+    /// time since it last ran rather than on every call, so it stays bounded
+    /// to the IPs seen within roughly the last two windows without scanning
+    /// the whole map on each attempt.
+    fn attempt_at(&self, ip: IpAddr, now: Instant) -> bool {
+        let mut state = self
+            .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let now = Instant::now();
-        let entry = attempts.entry(ip).or_insert((0, now));
-        if now.duration_since(entry.1) >= self.window {
+        let window = self.window;
+        if now.duration_since(state.last_sweep) >= window {
+            state
+                .attempts
+                .retain(|_, (_, first_seen)| now.duration_since(*first_seen) < window);
+            state.last_sweep = now;
+        }
+        let entry = state.attempts.entry(ip).or_insert((0, now));
+        // The sweep only bounds memory; it can keep an entry up to a window
+        // past its expiry, so each attempt checks its own window as well.
+        if now.duration_since(entry.1) >= window {
             *entry = (0, now);
         }
         entry.0 += 1;
@@ -256,4 +290,169 @@ pub(crate) fn verify_password(hash: &str, password: &str) -> bool {
     Argon2::default()
         .verify_password(password.as_bytes(), &parsed)
         .is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Within one window, distinct IPs accumulate as expected and the cap is
+    /// enforced per IP, independent of other IPs' counts.
+    #[test]
+    fn attempt_allows_up_to_max_then_blocks_within_the_window() {
+        let limiter = RateLimiter::new(3, Duration::from_secs(60));
+        let ip: IpAddr = "203.0.113.10".parse().unwrap();
+        assert!(limiter.attempt(ip));
+        assert!(limiter.attempt(ip));
+        assert!(limiter.attempt(ip));
+        assert!(
+            !limiter.attempt(ip),
+            "a 4th attempt within the window must be blocked"
+        );
+
+        let other: IpAddr = "203.0.113.11".parse().unwrap();
+        assert!(
+            limiter.attempt(other),
+            "a different IP must not be blocked by another IP's count"
+        );
+    }
+
+    /// Once `window` elapses, the same IP's counter resets rather than
+    /// staying blocked forever. Uses `attempt_at` with explicit `Instant`s
+    /// instead of a real sleep, so this never flakes under load.
+    #[test]
+    fn attempt_resets_after_the_window_elapses() {
+        let limiter = RateLimiter::new(1, Duration::from_millis(20));
+        let ip: IpAddr = "203.0.113.12".parse().unwrap();
+        let t0 = Instant::now();
+        assert!(limiter.attempt_at(ip, t0));
+        assert!(
+            !limiter.attempt_at(ip, t0),
+            "2nd attempt within the window is blocked"
+        );
+        assert!(
+            limiter.attempt_at(ip, t0 + Duration::from_millis(30)),
+            "attempt after the window elapsed must be allowed again"
+        );
+    }
+
+    /// An IP's own window must end on time even when the map-wide sweep
+    /// does not line up with it. Here `blocked` reaches its limit one second
+    /// after a sweep, so the next sweep, a full window later, runs one second
+    /// before `blocked`'s window expires and keeps its entry. One second after
+    /// that its window has elapsed while the following sweep is still almost
+    /// a window away; the attempt must be allowed then, not up to a window
+    /// later. Fails on a version that only resets counters through the sweep.
+    #[test]
+    fn attempt_resets_on_its_own_window_between_sweeps() {
+        let limiter = RateLimiter::new(1, Duration::from_secs(60));
+        let blocked: IpAddr = "203.0.113.13".parse().unwrap();
+        let other: IpAddr = "203.0.113.14".parse().unwrap();
+        let t0 = Instant::now();
+        let at = |secs| t0 + Duration::from_secs(secs);
+        assert!(limiter.attempt_at(other, at(61)), "runs a sweep at 61s");
+        assert!(limiter.attempt_at(blocked, at(62)));
+        assert!(!limiter.attempt_at(blocked, at(63)), "over the limit");
+        assert!(
+            limiter.attempt_at(other, at(121)),
+            "runs the next sweep at 121s, while blocked's window is still open"
+        );
+        assert!(
+            limiter.attempt_at(blocked, at(122)),
+            "blocked's own window elapsed at 122s and must no longer block it"
+        );
+    }
+
+    /// Without eviction, `attempts` gains one entry per distinct IP forever,
+    /// since nothing else ever removes a key (every `ip` is attacker
+    /// controlled: any client that can reach `/login`). This asserts the map
+    /// stays bounded to roughly one window's worth of IPs across many
+    /// windows, rather than growing with the total distinct IPs ever seen.
+    /// Fails on the pre-fix code, where the map holds all 300 entries (3
+    /// waves of 100 distinct IPs each) instead of at most 100. Uses
+    /// `attempt_at` with explicit `Instant`s instead of a real sleep between
+    /// waves, so this never flakes under load.
+    #[test]
+    fn attempts_map_stays_bounded_across_many_expired_windows() {
+        let limiter = RateLimiter::new(5, Duration::from_millis(20));
+        let mut now = Instant::now();
+        for wave in 0..3u32 {
+            for i in 0..100u32 {
+                let ip: IpAddr = format!("2001:db8::{:x}", wave * 100 + i).parse().unwrap();
+                limiter.attempt_at(ip, now);
+            }
+            now += Duration::from_millis(30);
+        }
+        let size = limiter.state.lock().unwrap().attempts.len();
+        assert!(
+            size <= 100,
+            "attempts map should stay bounded to roughly one window's worth of IPs \
+             (100), not the 300 distinct IPs seen across all windows; got {size}"
+        );
+    }
+
+    /// The sweep runs at most once per `window`, not on every call: an IP
+    /// can individually outlive its own `window` by up to about one more
+    /// window before the next sweep actually catches it. This drives the
+    /// state through exactly that gap. A first call forces a sweep (moving
+    /// `last_sweep` forward on its own, decoupled from `target`'s insertion
+    /// below). `target` is then inserted, and a later call lands just as a
+    /// full `window` has passed since that sweep: this second sweep runs but
+    /// does not evict `target` yet, since `target` is still younger than
+    /// `window` at that moment, and it becomes the new reference point. A
+    /// further call, well past `target`'s own `window` but well within a
+    /// `window` of that second sweep, must find `target` still present.
+    /// Only once a full `window` has passed since that second sweep does the
+    /// next call evict it. Fails against a version that runs the sweep on
+    /// every call, since that version evicts `target` as soon as it
+    /// individually ages past `window`, before the "still present" check
+    /// below runs. Uses `attempt_at` with explicit `Instant`s derived from a
+    /// single captured `t0` instead of real sleeps, so this never flakes
+    /// under load.
+    #[test]
+    fn sweep_runs_at_most_once_per_window_not_on_every_call() {
+        let window = Duration::from_millis(200);
+        let limiter = RateLimiter::new(5, window);
+        let target: IpAddr = "203.0.113.20".parse().unwrap();
+        let other: IpAddr = "203.0.113.21".parse().unwrap();
+        let t0 = Instant::now();
+
+        // The map is empty, so this sweep has nothing to evict; it only
+        // moves `last_sweep` forward, ahead of `target`'s insertion below.
+        let t1 = t0 + window + Duration::from_millis(50);
+        limiter.attempt_at(other, t1);
+
+        // `target` is inserted well after that sweep, so its own age and the
+        // time since the last sweep diverge from here on.
+        let t2 = t1 + Duration::from_millis(60);
+        limiter.attempt_at(target, t2);
+
+        // A full `window` has now passed since the first sweep, so this call
+        // sweeps again. `target` is only about `window` minus 60ms old here,
+        // so it survives, and this sweep becomes the new reference point.
+        let t3 = t1 + window + Duration::from_millis(50);
+        limiter.attempt_at(other, t3);
+
+        // `target` has individually exceeded `window` by now, but only a
+        // short time has passed since the sweep above, so this call must not
+        // sweep again.
+        let t4 = t3 + Duration::from_millis(70);
+        limiter.attempt_at(other, t4);
+        assert!(
+            limiter.state.lock().unwrap().attempts.contains_key(&target),
+            "target individually exceeded window, but the sweep only runs once \
+             per window and the last one is still recent, so target must still \
+             be present"
+        );
+
+        // A full `window` has now passed since the second sweep, so this
+        // call finally evicts target.
+        let t5 = t3 + window + Duration::from_millis(50);
+        limiter.attempt_at(other, t5);
+        assert!(
+            !limiter.state.lock().unwrap().attempts.contains_key(&target),
+            "a full window has now passed since the last sweep, so target must \
+             have been evicted"
+        );
+    }
 }
