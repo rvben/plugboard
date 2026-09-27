@@ -168,6 +168,57 @@ pub fn record_poll_outcomes(
     metrics.retain(|id, _| current_ids.contains(id.as_str()));
 }
 
+/// Standard Prometheus `process_resident_memory_bytes` for this plugboard
+/// process itself. A leak in plugboard's own memory (rather than a device it
+/// monitors) is otherwise invisible in `/metrics` until it is already
+/// hurting; this series lets a scraper alert on this process the same way it
+/// already alerts on the fleet.
+///
+/// Read directly from `/proc/self/status`: `VmRSS` is already reported in kB
+/// by the kernel, so this needs no page-size lookup and no dependency beyond
+/// the standard library. plugboard's production target is Linux; on macOS
+/// (used for local development only) there is no procfs, so this returns an
+/// empty string, following the same "absent data must not become a plausible
+/// value" rule as the rest of this file, rather than fabricate a value with
+/// no source.
+#[cfg(target_os = "linux")]
+fn process_metrics_text() -> String {
+    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
+        return String::new();
+    };
+    let Some(resident_bytes) = parse_vm_rss_bytes(&status) else {
+        return String::new();
+    };
+    format!(
+        "# HELP process_resident_memory_bytes Resident memory size in bytes.\n\
+         # TYPE process_resident_memory_bytes gauge\n\
+         process_resident_memory_bytes {resident_bytes}\n"
+    )
+}
+
+/// Resident memory in bytes from the text of `/proc/<pid>/status`, or `None`
+/// when the `VmRSS` line is missing, malformed or not in kB, so the caller
+/// omits the series instead of reporting a wrong value.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_vm_rss_bytes(status: &str) -> Option<u64> {
+    let rest = status
+        .lines()
+        .find_map(|line| line.strip_prefix("VmRSS:"))?;
+    let mut fields = rest.split_whitespace();
+    let kib = fields.next()?.parse::<u64>().ok()?;
+    if fields.next()? != "kB" {
+        return None;
+    }
+    kib.checked_mul(1024)
+}
+
+/// macOS has no procfs, so there is no source for `process_resident_memory_bytes`
+/// here; `/metrics` omits it rather than report a fabricated value.
+#[cfg(not(target_os = "linux"))]
+fn process_metrics_text() -> String {
+    String::new()
+}
+
 /// Renders the full Prometheus text exposition (format version `0.0.4`) for
 /// the current fleet. Each metric family's `# HELP`/`# TYPE` lines are
 /// written once, followed by that family's series for every device that
@@ -333,6 +384,8 @@ pub fn render(fleet: &Fleet, metrics_state: &MetricsState, version: &str) -> Str
             );
         }
     }
+
+    out.push_str(&process_metrics_text());
 
     out
 }
@@ -921,5 +974,66 @@ mod tests {
             ),
             "text was:\n{text}"
         );
+    }
+
+    /// `/metrics` must expose `process_resident_memory_bytes` with a
+    /// positive value, so a leak in plugboard's own process is visible in
+    /// the same place the fleet's telemetry is, before it grows into a
+    /// production incident. The value comes from `/proc/self/status`, which
+    /// only exists on Linux; macOS is covered by the negative-control test
+    /// below instead, asserting the series is absent rather than guessing a
+    /// value with no source.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn metrics_expose_a_positive_resident_memory_value_on_linux() {
+        let fleet = Fleet { devices: vec![] };
+        let metrics_state: MetricsState = Mutex::new(HashMap::new());
+        let text = render(&fleet, &metrics_state, "0.0.0-test");
+
+        let value: f64 = text
+            .lines()
+            .find_map(|line| line.strip_prefix("process_resident_memory_bytes "))
+            .unwrap_or_else(|| panic!("process_resident_memory_bytes missing; text was:\n{text}"))
+            .trim()
+            .parse()
+            .expect("process_resident_memory_bytes value must parse as a number");
+        assert!(
+            value > 0.0,
+            "process_resident_memory_bytes must be positive for a running process, got {value}"
+        );
+    }
+
+    /// macOS (used for local development, never production) has no procfs,
+    /// so there is no source for `process_resident_memory_bytes` here.
+    /// `/metrics` must omit the series entirely rather than report a
+    /// fabricated value, the same "absent data must not become a plausible
+    /// value" rule the rest of this file follows. This is the negative
+    /// control for the Linux test above.
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn metrics_omit_resident_memory_series_without_a_linux_source() {
+        let fleet = Fleet { devices: vec![] };
+        let metrics_state: MetricsState = Mutex::new(HashMap::new());
+        let text = render(&fleet, &metrics_state, "0.0.0-test");
+
+        assert!(
+            !text.contains("process_resident_memory_bytes"),
+            "no procfs source exists on this platform, so this series must be absent, not fabricated; text was:\n{text}"
+        );
+    }
+
+    #[test]
+    fn vm_rss_is_parsed_from_proc_status_in_bytes() {
+        let status = "Name:\tplugboard\nVmPeak:\t  30000 kB\nVmRSS:\t   21844 kB\nThreads:\t9\n";
+        assert_eq!(parse_vm_rss_bytes(status), Some(21844 * 1024));
+    }
+
+    #[test]
+    fn vm_rss_absent_or_malformed_yields_no_value() {
+        assert_eq!(parse_vm_rss_bytes("Name:\tplugboard\nThreads:\t9\n"), None);
+        assert_eq!(parse_vm_rss_bytes("VmRSS:\t\n"), None);
+        assert_eq!(parse_vm_rss_bytes("VmRSS:\t  abc kB\n"), None);
+        assert_eq!(parse_vm_rss_bytes("VmRSS:\t  21844 MB\n"), None);
+        assert_eq!(parse_vm_rss_bytes("VmRSS:\t  21844\n"), None);
     }
 }
