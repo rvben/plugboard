@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.2.2](https://github.com/rvben/plugboard/compare/v0.2.1...v0.2.2) - 2026-09-27
+
+### Added
+
+- **ui**: move per-device settings onto the device page ([feb36d0](https://github.com/rvben/plugboard/commit/feb36d02dec1fbd465b95a492a0f85625a05981f))
+
+### Fixed
+
+- **deps**: update rustls to 0.23.45 for RUSTSEC-2026-0285 ([1d62d95](https://github.com/rvben/plugboard/commit/1d62d9515be6596b8f7479d42a483b744653e7e5))
+
 ## [0.2.1](https://github.com/rvben/plugboard/compare/v0.2.0...v0.2.1) - 2026-07-21
 
 ### Added
