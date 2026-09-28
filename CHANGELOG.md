@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [0.2.3](https://github.com/rvben/plugboard/compare/v0.2.2...v0.2.3) - 2026-09-28
+
+### Added
+
+- **metrics**: expose process_resident_memory_bytes ([bd96467](https://github.com/rvben/plugboard/commit/bd96467cc6a79ed455f037523d382627f02749dc))
+
+### Fixed
+
+- **updates**: reuse http client across check_fleet cycles ([6a26f62](https://github.com/rvben/plugboard/commit/6a26f62b4bc34e1e80125ccbc6c3f89a8bc6be90))
+- **auth**: evict expired rate-limit entries to bound memory ([49d708f](https://github.com/rvben/plugboard/commit/49d708ffd59b6976556e525d1077334adbed04a5))
+
 ## [0.2.2](https://github.com/rvben/plugboard/compare/v0.2.1...v0.2.2) - 2026-09-27
 
 ### Added
